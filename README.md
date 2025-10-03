@@ -13,7 +13,7 @@
 **D)** To determine the optimal threshold separating brain and artifactual subspaces, output EEG data is evaluated using the Signal & Noise Subspace Alignment Index (SENSAI). This is done by respectively maximising and minimizing the subspace similarities of the retained "signal" and removed "noise" with the refCOV. 
 
 ### Example videos of GEDAI denoising
-[![Watch a few example videos](https://img.youtube.com/vi/5BdXhMMOiZU/0.jpg)](https://www.youtube.com/playlist?list=PLFwYJV7JHVFRmGTpW3y2MqkL_pYTitxpF)
+[![Watch a few example videos](https://img.youtube.com/vi/ZRRj__Z0Xck/0.jpg)](https://www.youtube.com/playlist?list=PLFwYJV7JHVFRmGTpW3y2MqkL_pYTitxpF)
 
 
 ### Prerequisites
