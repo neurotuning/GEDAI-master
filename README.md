@@ -1,4 +1,4 @@
-## GEDAI denoising plugin for the EEGlab toolbox
+## GEDAI denoising plugin for the EEGLAB toolbox
 <img width="2048" height="512" alt="Gemini_Generated_Image_33jtd633jtd633jt" src="https://github.com/user-attachments/assets/43a6294e-753e-456c-9e4e-3da7ea1955e1" />
 
 ## Generalized Eigenvalue De-Artifacting Instrument (GEDAI) 
