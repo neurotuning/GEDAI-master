@@ -1,5 +1,6 @@
 ## GEDAI denoising plugin for EEGLAB
-<img width="2048" height="512" alt="Gemini_Generated_Image_33jtd633jtd633jt" src="https://github.com/user-attachments/assets/43a6294e-753e-456c-9e4e-3da7ea1955e1" />
+
+<img width="2048" height="512" alt="GEDAI_logo" src="https://github.com/user-attachments/assets/e7252afd-7619-43de-a36d-6679a14d0023" />
 
 ## Generalized Eigenvalue De-Artifacting Instrument (GEDAI) 
 **A)** EEG may be considered to be a mixture of electrical activities from a brain “signal” (sub)space, and one containing different types of non-cerebral noise or “artifacts”. This mixture may be “unmixed” by linear decomposition techniques (e.g. PCA or ICA) into separate "components" with individual source locations and respective time-courses. However, although PCA and ICA leverage statistical properties within mixed data to recover underlying sourcesas, they are "blind" source separation methods, functioning without a priori knowledge of the original signals or their mixing process. GEDAI combines theoretical knowledge of the brain’s “signal” subspace with generalized eigenvalue decomposition (GEVD) to automatically separate brain and artifact components. Here, a theoretical model of EEG generation is used as an estimate of the brain’s “noise-free” subspace.
@@ -13,7 +14,9 @@
 **D)** To determine the optimal threshold separating brain and artifactual subspaces, output EEG data is evaluated using the Signal & Noise Subspace Alignment Index (SENSAI). This is done by respectively maximising and minimizing the subspace similarities of the retained "signal" and removed "noise" with the refCOV. 
 
 ### Example videos of unsupervised GEDAI denoising
-[![Watch a few example videos](https://img.youtube.com/vi/ZRRj__Z0Xck/0.jpg)](https://www.youtube.com/playlist?list=PLFwYJV7JHVFRmGTpW3y2MqkL_pYTitxpF)
+
+
+[![Watch a few example videos](https://github.com/user-attachments/assets/6c4145c0-a67c-4575-bd83-e4a40d0dc871)](https://www.youtube.com/playlist?list=PLFwYJV7JHVFRmGTpW3y2MqkL_pYTitxpF)
 
 
 ### Prerequisites
