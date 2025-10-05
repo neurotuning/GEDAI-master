@@ -43,7 +43,7 @@ Ros, T, Férat, V., Huang, Y., Colangelo, C., Kia S.M., Wolfers T., Vulliemoz, S
 This project is licensed under the GNU Affero General Public License v3.0 - see the [LICENSE](LICENSE) file for details.  
 The open-source license granted here allows for non-commercial, research and evaluation purposes. 
 
-The core algorithms in this repository are the subject of a pending patent application. 
+For commercial use, the core algorithms in this repository are the subject of a pending patent application. 
 
 ## 📧 Contact
 
