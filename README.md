@@ -40,11 +40,11 @@ Ros, T, Férat, V., Huang, Y., Colangelo, C., Kia S.M., Wolfers T., Vulliemoz, S
 
 ## License
 
-Open-Source License (GNU AGPLv3)
+**Open-Source License (GNU AGPLv3)**  
 You may use this software under the terms of the GNU Affero General Public License v3.0 [LICENSE](LICENSE). This is suitable for personal use, research, evaluation, or for inclusion in other open-source projects that are also licensed under the AGPLv3.
 
-Commercial License
-If you wish to use this software in a commercial or proprietary application without being bound by the copyleft terms of the AGPLv3, you must purchase a commercial license. The core algorithms in this repository are the subject of a pending patent application, and a commercial license includes a grant for patent rights.
+**Commercial License**  
+If you wish to use this software in a commercial or proprietary application without being bound by the copyleft terms of the AGPLv3, you must purchase a commercial license. The core algorithms in this repository are the subject of a pending patent application, and a commercial license includes a grant for patent rights.  
 
 ## 📧 Contact
 
