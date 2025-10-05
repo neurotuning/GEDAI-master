@@ -49,7 +49,7 @@ If you wish to use this software in a commercial or proprietary application with
 ## 📧 Contact
 
 For any questions or enquiries, please contact:
-Tomas Ros - dr.t.ros@gmail.com
+Tomas Ros - tomas.ros@unige.ch
 
 ## Acknowledgements
 We are gratefully supported by the Center for Biomedical Imaging (CIBM) and the Swiss National Science Foundation (SNSF)
