@@ -47,7 +47,7 @@ The core algorithms in this repository are the subject of a pending patent appli
 
 ## 📧 Contact
 
-For any questions or for commercial use, please contact:
+For any questions or enquiries, please contact:
 Tomas Ros - dr.t.ros@gmail.com
 
 ## Acknowledgements
