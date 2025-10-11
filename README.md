@@ -55,8 +55,6 @@ Tomas Ros - tomas.ros@unige.ch
 We are gratefully supported by the Center for Biomedical Imaging (CIBM), the Swiss National Science Foundation (SNSF), and Unitec
 
 ![unnamed (1)](https://github.com/user-attachments/assets/a5fe08d8-4066-4cd9-8db5-e8bc41760664)
-<img width="238" alt="2022-10-12-134122 670745snsf" src="https://github.com/user-attachments/assets/54d236fd-3745-48a1-b6a2-97ffd9bcd7f1" />
-<img width="238" alt="2025-10-12-134122 670745unitec" src= "https://github.com/user-attachments/assets/b3b4e13d-7145-42b6-a891-ad6a61890e5e" />
-
-
+![snf](https://github.com/user-attachments/assets/9db9e0b5-05dd-488e-9730-9abea2f7e8af)
+![unitec](https://github.com/user-attachments/assets/5417b534-6d3c-495a-8c24-70f65442221b)
 
