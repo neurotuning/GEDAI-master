@@ -5,8 +5,7 @@
 ## Generalized Eigenvalue De-Artifacting Instrument (GEDAI) 
 **A)** EEG may be considered to be a mixture of electrical activities from a brain “signal” (sub)space, and one containing different types of non-cerebral noise or “artifacts”. This mixture may be “unmixed” by linear decomposition techniques (e.g. PCA or ICA) into separate "components" with individual source locations and respective time-courses. However, although PCA and ICA leverage statistical properties within mixed data to recover underlying sourcesas, they are "blind" source separation methods, functioning without a priori knowledge of the original signals or their mixing process. GEDAI combines theoretical knowledge of the brain’s “signal” subspace with generalized eigenvalue decomposition (GEVD) to automatically separate brain and artifact components. Here, a theoretical model of EEG generation is used as an estimate of the brain’s “noise-free” subspace.
 
-
-<img width="1094" height="778" alt="GEDAI_summary_fig" src="https://github.com/user-attachments/assets/be039586-40f4-4f71-9d03-846fc4dc6662" />
+![Untitled](https://github.com/user-attachments/assets/c4242636-cc03-4292-a568-b31555de5360)
 
 
 **B)** Each data covariance matrix (dataCOV) is decomposed into source components with GEVD.  
