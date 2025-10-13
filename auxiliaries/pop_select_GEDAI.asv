@@ -311,7 +311,7 @@ else
         chanFlag = ones(1, EEG.nbchan);
     end
     if ~isempty(g.rmchantype)
-        inds = eeg_decodechan(EEG.chanlocs, g.rmchantype, 'type', true);
+        inds = eeg_decodechan(EEG, g.rmchantype, 'type', true);
         chanFlag(inds) = 0;
     end
 end
