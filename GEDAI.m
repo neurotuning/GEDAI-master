@@ -232,6 +232,15 @@ EEGin.data = EEGin.data(:, 1:size(EEGclean.data, 2));
 EEGartifacts = EEGclean;
 EEGartifacts.data = EEGin.data - EEGclean.data;
 
+% Update EEGLAB params due to cropping of last epoch
+EEGclean.times = EEGclean.times(1:size(EEGclean.data, 2));
+EEGclean.pnts = size(EEGclean.data, 2);
+EEGclean.xmax = EEGclean.times(end) / 1000;
+
+EEGartifacts.times = EEGartifacts.times(1:size(EEGartifacts.data, 2));
+EEGartifacts.pnts = size(EEGartifacts.data, 2);
+EEGartifacts.xmax = EEGartifacts.times(end) / 1000;
+
 % Calculate composite SENSAI score
 noise_multiplier = 1;
 [SENSAI_score] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGin.srate, epoch_size, refCOV, noise_multiplier);
