@@ -40,8 +40,6 @@ Ros, T, Férat, V., Huang, Y., Colangelo, C., Kia S.M., Wolfers T., Vulliemoz, S
 
 
 ## License
-
-**Open-Source License (GNU AGPLv3)**  
 You may use this software under the terms of the PolyForm Noncommercial License 1.0.0 [LICENSE](LICENSE). This is suitable for personal use, research, or evaluation.
 
 **Commercial License**  
