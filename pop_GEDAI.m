@@ -54,7 +54,7 @@ uilist = { ...
     {'style' 'checkbox' 'string' ' vis_artifacts from ASR' 'tag' 'visualization_A' 'Value' 1}, ...
 };
 geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1]};
-title = '  GEDAI denoising |  v1.0  ';
+title = '  GEDAI denoising |  v1.1  ';
 
 % Get user input
 [userInput, ~, ~, out] = inputgui( geometry, uilist, 'help(''GEDAI'')', title);
