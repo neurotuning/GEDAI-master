@@ -1,0 +1,16 @@
+Basic instructions for using the GEDAI plugin for EEGLAB
+
+* Step 1: We recommend high-passing the data before GEDAI denoising (e.g. > 0.5 Hz or > 1 Hz).  
+In the GUI, go to **Tools -> Filter the data -> Basic FIR filter** and set the "Lower edge of the frequency pass band (Hz)" to 0.5 or 1 Hz.
+
+* Step 2: In the GUI, go to **Edit -> Channel locations**, to import channel labels/locations.  
+Make sure a) EEG channel labels (e.g. "Fp1", "Fz", etc without any trailing characters) or b) EEG channel locations (e.g. XYZ coordinates) are present in the EEG.chanlocs structure. 
+
+* Step 3: Launch the GEDAI plugin. For the leadfield matrix type, depending on Step 2 above, a) use option "precomputed", for b) use option "interpolated".
+
+May the EEG force be with you 👍 
+
+brought to you by: 	NeuroTuning Lab
+			Center for Biomedical Imaging (CIBM)
+			University of Geneva
+			Switzerland
