@@ -33,7 +33,7 @@
 
 ### Basic instructions for use
 
-Check out the Wiki: [wiki](https://github.com/neurotuning/GEDAI-master/wiki).
+Check out the [Wiki](https://github.com/neurotuning/GEDAI-master/wiki/).
 
 ## 📜 Citation
 
