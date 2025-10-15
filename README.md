@@ -31,6 +31,10 @@
 2. Unzip and copy the 'GEDAI-master' folder into the "plugins" subdirectory of EEGlab.
 3. Launch MATLAB and then EEGLAB.
 
+### Basic instructions for use
+
+Check out the Wiki: https://github.com/neurotuning/GEDAI-master/wiki
+
 ## 📜 Citation
 
 If you use GEDAI in your research, please cite the original publication:
