@@ -1,7 +1,8 @@
 ## GEDAI denoising plugin for EEGLAB
 
 
-![gedai](https://github.com/user-attachments/assets/b42bfd18-3965-495a-85bd-616619d6f641)
+<img width="300" height="270" alt="GEDAI-CIBM_logo" src="https://github.com/user-attachments/assets/bc1775f6-c3c7-4273-a2ac-6ac855653039" />
+
 
 ## Generalized Eigenvalue De-Artifacting Instrument (GEDAI) 
 **A)** EEG may be considered to be a mixture of electrical activities from a brain “signal” (sub)space, and one containing different types of non-cerebral noise or “artifacts”. This mixture may be “unmixed” by linear decomposition techniques (e.g. PCA or ICA) into separate "components" with individual source locations and respective time-courses. However, although PCA and ICA leverage statistical properties within mixed data to recover underlying sources, they are "blind" source separation methods, functioning without a priori knowledge of the original signals or their mixing process. GEDAI combines theoretical knowledge of the brain’s “signal” subspace with generalized eigenvalue decomposition (GEVD) to automatically separate brain and artifact components. Here, a theoretical model of EEG generation is used as an estimate of the brain’s “noise-free” subspace.
@@ -56,7 +57,6 @@ Tomas Ros - tomas.ros@unige.ch
 
 ## Acknowledgements
 We are gratefully supported by the Center for Biomedical Imaging (CIBM), the Swiss National Science Foundation (SNSF), and Unitec
-
 
 [![cibm](https://github.com/user-attachments/assets/0e67c6b9-0dae-415f-8321-6b8148862e85)](https://cibm.ch/)
 [![snf](https://github.com/user-attachments/assets/9db9e0b5-05dd-488e-9730-9abea2f7e8af)](https://www.snf.ch/en)
