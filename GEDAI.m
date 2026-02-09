@@ -80,6 +80,14 @@
 %                             proportion of the variance of the original EEG data.
 %
 %   ENOVA_per_epoch         - Vector of ENOVA values for each epoch.
+%
+%   mean_ENOVA_per_band     - Vector of mean ENOVA values for each frequency band.
+%                             First element is broadband, followed by wavelet bands
+%                             (gamma, beta, alpha, theta, delta, etc.).
+%
+%   ENOVA_per_epoch_per_band - Cell array of ENOVA per-epoch vectors for each band.
+%                             Each cell contains a vector of ENOVA values for that
+%                             specific frequency band's epochs.
 % 
 %   com                     - output logging to EEG.history
 
@@ -96,7 +104,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, mean_ENOVA_per_band, ENOVA_per_epoch_per_band, com]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type)
 
 if nargin < 2 || isempty(artifact_threshold_type)
     artifact_threshold_type = 'auto';
@@ -306,10 +314,15 @@ clear mra_hp
 disp([newline 'SENSAI threshold detection...please wait']);
 broadband_optimization_type = 'parabolic';
 broadband_artifact_threshold_type = 'auto-';
-[cleaned_broadband_data, ~, broadband_sensai, broadband_thresh] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel);
+broadband_minThreshold = -6;
+[cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, mean_ENOVA_broadband, ENOVA_per_epoch_broadband] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, broadband_minThreshold);
+
+
 % Initialize the output arrays with the broadband results
 SENSAI_score_per_band = broadband_sensai;
 artifact_threshold_per_band = broadband_thresh;
+mean_ENOVA_per_band = mean_ENOVA_broadband;
+ENOVA_per_epoch_per_band = {ENOVA_per_epoch_broadband};
 %% Second pass: Wavelet decomposition and per-band denoising
 % MEMORY OPTIMIZED: Use incremental band processing instead of full decomposition
 unfiltered_data = cleaned_broadband_data';
@@ -404,6 +417,33 @@ end
 % MEMORY OPTIMIZED: Get dimensions from unfiltered data
 [num_samples, num_channels] = size(unfiltered_data);
 
+% Define band-specific minThreshold values
+% Alpha band (7-13 Hz) gets minThreshold = -3, all others get 0
+minThreshold_per_band = zeros(1, num_bands_to_process);
+maxThreshold_per_band = 12 * ones(1, num_bands_to_process); % maxThreshold is same for all bands
+for f = 1:num_bands_to_process
+    % Check if center frequency is in alpha range (7-13 Hz)
+    if center_frequencies(f) >= 7 && center_frequencies(f) <= 14
+        minThreshold_per_band(f) = -6;  % Alpha band: allow less aggressive denoising
+    else
+        minThreshold_per_band(f) = 0;   % All other bands: standard threshold
+    end
+end
+
+% Display band-specific minThreshold settings
+disp(' ');
+disp('Band-specific minThreshold settings:');
+for f = 1:num_bands_to_process
+    if minThreshold_per_band(f) ~= 0
+        fprintf('  Band %d (%.2g Hz): minThreshold = %.1f (Alpha band)\n', f, center_frequencies(f), minThreshold_per_band(f));
+    end
+end
+if all(minThreshold_per_band == 0)
+    disp('  All bands using default minThreshold = 0');
+end
+disp(' ');
+
+
 % MEMORY OPTIMIZED: Use 2D accumulator with correct type
 % Pre-allocate with same precision as input data
 wavelet_band_filtered_data = zeros(num_channels, num_samples, 'like', unfiltered_data);
@@ -414,6 +454,8 @@ if parallel
         temp_sensai_scores = zeros(1, num_bands_to_process);
         temp_thresholds = zeros(1, num_bands_to_process);
         temp_cleaned_bands = cell(1, num_bands_to_process);  % MEMORY OPTIMIZED: Use cell array for temporary storage
+        temp_mean_ENOVA = zeros(1, num_bands_to_process);
+        temp_ENOVA_per_epoch = cell(1, num_bands_to_process);
         
         % MEMORY OPTIMIZED: Incremental band extraction in parallel
         parfor f = 1:num_bands_to_process
@@ -422,17 +464,19 @@ if parallel
             
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             try
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_mean_enova, temp_enova_epochs] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, minThreshold_per_band(f));
             catch ME
                  % If OOM or other memory error, try single precision
                  warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_mean_enova, temp_enova_epochs] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, minThreshold_per_band(f));
             end
             
             % MEMORY OPTIMIZED: Store in cell array instead of 3D array
             temp_cleaned_bands{f} = cleaned_band_data;
             temp_sensai_scores(f) = temp_sensai;
             temp_thresholds(f) = temp_thresh;
+            temp_mean_ENOVA(f) = temp_mean_enova;
+            temp_ENOVA_per_epoch{f} = temp_enova_epochs;
         end
         
         % MEMORY OPTIMIZED: Accumulate cleaned bands into 2D array
@@ -443,6 +487,8 @@ if parallel
         
         SENSAI_score_per_band = [SENSAI_score_per_band, temp_sensai_scores];
         artifact_threshold_per_band = [artifact_threshold_per_band, temp_thresholds];
+        mean_ENOVA_per_band = [mean_ENOVA_per_band, temp_mean_ENOVA];
+        ENOVA_per_epoch_per_band = [ENOVA_per_epoch_per_band, temp_ENOVA_per_epoch];
         success_parallel = true;
     catch 
         warning('Parallel processing failed: %s. Switching to double precision non-parallel processing.');
@@ -463,17 +509,19 @@ if ~parallel || ~success_parallel
             
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             try
-                [cleaned_band_data, ~, sensai_val, thresh_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false);
+                [cleaned_band_data, ~, sensai_val, thresh_val, mean_enova_val, enova_epochs_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, minThreshold_per_band(f));
             disp(['processing wavelet band = ' num2str(f)])
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, sensai_val, thresh_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false);
+                [cleaned_band_data, ~, sensai_val, thresh_val, mean_enova_val, enova_epochs_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, minThreshold_per_band(f));
             end
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
             wavelet_band_filtered_data = wavelet_band_filtered_data + cleaned_band_data;
             SENSAI_score_per_band(f+1) = sensai_val;
             artifact_threshold_per_band(f+1) = thresh_val;
+            mean_ENOVA_per_band(f+1) = mean_enova_val;
+            ENOVA_per_epoch_per_band{f+1} = enova_epochs_val;
             
             % MEMORY OPTIMIZED: Clear band data immediately
             clear wavelet_data_band cleaned_band_data;
@@ -490,13 +538,15 @@ if ~parallel || ~success_parallel
             wavelet_data_band = modwt_single_band(single(unfiltered_data), wavelet_type, actual_decomposition_level, f)';
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             
-            [cleaned_band_data, ~, sensai_val, thresh_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false);
+            [cleaned_band_data, ~, sensai_val, thresh_val, mean_enova_val, enova_epochs_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, minThreshold_per_band(f));
             disp(['processing wavelet band (single) = ' num2str(f)])
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
             wavelet_band_filtered_data = wavelet_band_filtered_data + cleaned_band_data;
             SENSAI_score_per_band(f+1) = sensai_val;
             artifact_threshold_per_band(f+1) = thresh_val;
+            mean_ENOVA_per_band(f+1) = mean_enova_val;
+            ENOVA_per_epoch_per_band{f+1} = enova_epochs_val;
             
             % MEMORY OPTIMIZED: Clear band data immediately
             clear wavelet_data_band cleaned_band_data;
@@ -642,6 +692,49 @@ end
 disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
 disp(['Mean ENOVA: ' num2str(round(mean_ENOVA, 2, 'significant'))]);
 
+% Display per-band ENOVA with center frequencies
+disp(' ');
+disp('Per-Band ENOVA Scores:');
+left_margin = '  ';
+header1 = 'Band';
+header2 = 'Center Freq (Hz)';
+header3 = 'Mean ENOVA';
+
+% Prepare data for display
+band_names = cell(1, length(mean_ENOVA_per_band));
+band_names{1} = 'Broadband';
+for i = 1:num_bands_to_process
+    band_names{i+1} = sprintf('Band %d', i);
+end
+
+% Create frequency strings
+freq_strings = cell(1, length(mean_ENOVA_per_band));
+freq_strings{1} = 'N/A';  % Broadband doesn't have a single center frequency
+for i = 1:num_bands_to_process
+    freq_strings{i+1} = sprintf('%.2g', center_frequencies(i));
+end
+
+% Create ENOVA strings
+enova_strings = cell(1, length(mean_ENOVA_per_band));
+for i = 1:length(mean_ENOVA_per_band)
+    enova_strings{i} = sprintf('%.4f', mean_ENOVA_per_band(i));
+end
+
+% Calculate column widths
+col1_width = max([length(header1), cellfun(@length, band_names)]);
+col2_width = max([length(header2), cellfun(@length, freq_strings)]);
+col3_width = max([length(header3), cellfun(@length, enova_strings)]);
+
+% Print header
+fprintf('%s%-*s | %-*s | %-*s\n', left_margin, col1_width, header1, col2_width, header2, col3_width, header3);
+fprintf('%s%s-|-%s-|-%s\n', left_margin, repmat('-', 1, col1_width), repmat('-', 1, col2_width), repmat('-', 1, col3_width));
+
+% Print data rows
+for i = 1:length(mean_ENOVA_per_band)
+    fprintf('%s%-*s | %-*s | %-*s\n', left_margin, col1_width, band_names{i}, col2_width, freq_strings{i}, col3_width, enova_strings{i});
+end
+disp(' ');
+
 % Use original epoch count for rejection statistics (before rejection)
 num_rejected = length(epochs_to_remove);
 if original_total_epochs > 0
@@ -659,6 +752,8 @@ EEGclean.etc.GEDAI.SENSAI_score_per_band = SENSAI_score_per_band;
 EEGclean.etc.GEDAI.artifact_threshold_per_band = artifact_threshold_per_band;
 EEGclean.etc.GEDAI.mean_ENOVA = mean_ENOVA;
 EEGclean.etc.GEDAI.ENOVA_per_epoch = ENOVA_per_epoch;
+EEGclean.etc.GEDAI.mean_ENOVA_per_band = mean_ENOVA_per_band;
+EEGclean.etc.GEDAI.ENOVA_per_epoch_per_band = ENOVA_per_epoch_per_band;
 EEGclean.etc.GEDAI.epochs_rejected = num_rejected;
 EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;

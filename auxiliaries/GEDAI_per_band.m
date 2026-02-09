@@ -11,7 +11,15 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel)
+function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, mean_ENOVA_band, ENOVA_per_epoch_band] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, minThreshold_override)
+
+% Use custom minThreshold if provided, otherwise default to 0
+if ~isempty(minThreshold_override)
+    minThreshold = minThreshold_override;
+else
+    minThreshold = 0; % Default
+end
+maxThreshold = 12;
 
 if isempty(eeg_data)
     error('Cannot process empty data');
@@ -77,8 +85,7 @@ if ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto'
     elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3;
     else, noise_multiplier = 6; % 'auto-'
     end
-    
-    minThreshold = 0; maxThreshold = 12;
+
     
     % --- Optimization Method Switch ---
     switch optimization_type
@@ -161,4 +168,30 @@ artifacts_data = artifacts_data(:, 1:pnts_original);
 
 %% Calculate final SENSAI score
 [~, ~, SENSAI_score] = SENSAI(EEGdata_epoched, srate, epoch_size, artifact_threshold_out, refCOV, Eval, Evec, 1);
+
+%% Calculate ENOVA (Explained Noise Variance) for this band
+% Truncate data to contain whole number of epochs
+pnts = size(cleaned_data, 2);
+epoch_samples = srate * epoch_size;
+num_epochs_possible = floor(pnts / epoch_samples);
+new_length = num_epochs_possible * epoch_samples;
+
+cleaned_data_for_enova = cleaned_data(:, 1:new_length);
+artifacts_data_for_enova = artifacts_data(:, 1:new_length);
+
+% Epoch the data
+num_chans = size(cleaned_data, 1);
+signal_epoched = reshape(cleaned_data_for_enova, num_chans, epoch_samples, []);
+noise_epoched = reshape(artifacts_data_for_enova, num_chans, epoch_samples, []);
+num_epochs = size(signal_epoched, 3);
+
+% Calculate ENOVA per epoch
+ENOVA_per_epoch_band = zeros(1, num_epochs);
+for epoch = 1:num_epochs
+    original_epoch = signal_epoched(:,:,epoch) + noise_epoched(:,:,epoch);
+    var_original = var(original_epoch(:));
+    var_noise = var(reshape(noise_epoched(:,:,epoch), [], 1));
+    ENOVA_per_epoch_band(epoch) = var_noise / var_original;
+end
+mean_ENOVA_band = mean(ENOVA_per_epoch_band);
 end
