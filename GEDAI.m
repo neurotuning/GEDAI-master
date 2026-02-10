@@ -243,7 +243,8 @@ else
 end
 % --- Wavelet-based High-Pass Filtering ---
 % Calculate required level to resolve lowcut_frequency
-hp_wavelet_levels = ceil(log2(EEGavRef.srate / lowcut_frequency) - 1);
+highpass_frequency=0.1;
+hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
 % Limit to maximum possible level given data length
 max_possible_level = floor(log2(size(EEGavRef.data, 2)));
 hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
@@ -255,7 +256,7 @@ wavelet_type = 'haar';
 % Robust execution order: GPU(Double) -> GPU(Single) -> CPU(Double) -> CPU(Single)
 success = false;
 
-disp([newline 'Wavelet high-pass filtering > ' num2str(lowcut_frequency) 'Hz']);
+disp([newline 'Wavelet high-pass filtering > ' num2str(highpass_frequency) 'Hz']);
 warning('off');
 % Attempt GPU Processing
 if gpuDeviceCount > 0
