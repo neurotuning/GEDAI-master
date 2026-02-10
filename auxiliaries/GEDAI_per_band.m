@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, mean_ENOVA_band, ENOVA_per_epoch_band] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, minThreshold_override)
+function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, mean_ENOVA_band, ENOVA_per_epoch_band] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, minThreshold_override, maxThreshold_override)
 
 % Use custom minThreshold if provided, otherwise default to 0
 if ~isempty(minThreshold_override)
@@ -19,7 +19,13 @@ if ~isempty(minThreshold_override)
 else
     minThreshold = 0; % Default
 end
-maxThreshold = 12;
+
+% Use custom maxThreshold if provided, otherwise default to 12
+if exist('maxThreshold_override', 'var') && ~isempty(maxThreshold_override)
+    maxThreshold = maxThreshold_override;
+else
+    maxThreshold = 12; % Default
+end
 
 if isempty(eeg_data)
     error('Cannot process empty data');
