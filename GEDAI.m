@@ -212,6 +212,22 @@ else
             end
             refCOV = L.leadfield4GEDAI.gram_matrix_avref(chanidx,chanidx);
 
+
+
+            % Calculate the condition number
+            c = cond(refCOV);
+
+            fprintf('refCOV Condition Number: %.2f\n', c);
+
+            % Interpretation
+            if c > 1e6
+            fprintf('Status: refCOV Highly Unstable. Small noise will flip your eigenvectors.\n');
+            elseif c > 1e3
+            fprintf('Status: refCOV Moderately Unstable. Regularization recommended.\n');
+            else
+            fprintf('Status: refCOV Stable.\n');
+            end
+
         case 'interpolated'
     % 1. Verification of Spatial Locations
     % We check if the number of populated X and sph_theta coordinates 
@@ -238,7 +254,23 @@ else
         % 3. Interpolation and Covariance
         interpolated_EEG = interp_mont_GEDAI(leadfield_EEG, EEGavRef.chanlocs);
         refCOV = interpolated_EEG.data * interpolated_EEG.data';
+
+                % Calculate the condition number
+            c = cond(refCOV);
+
+            fprintf('refCOV Condition Number: %.2f\n', c);
+
+            % Interpretation
+            if c > 1e6
+            fprintf('Status: refCOV Highly Unstable. Small noise will flip your eigenvectors.\n');
+            elseif c > 1e3
+            fprintf('Status: refCOV Moderately Unstable. Regularization recommended.\n');
+            else
+            fprintf('Status: refCOV Stable.\n');
+            end
     end
+
+
     end
 end
 % --- Wavelet-based High-Pass Filtering ---
