@@ -380,20 +380,9 @@ end
 % Calculate the ideal epoch size for each band based on the rule
 epoch_sizes_per_wavelet_band = epoch_size_in_cycles ./ lower_frequencies;
 
-% --- Display wavelet band-widths and epoch sizes ---
+% --- Display wavelet band information (simplified - full table shown at end) ---
 disp(' '); 
-left_margin = '  '; 
-header1 = 'Wavelet Center Freq (Hz)';
-header2 = 'Epoch Size (s)';
-str_freqs = num2str(center_frequencies(1:num_bands_to_process)', '%.2g');
-str_epochs = num2str(epoch_sizes_per_wavelet_band(1:num_bands_to_process)', '%.2g');
-col1_width = max(length(header1), size(str_freqs, 2));
-col2_width = max(length(header2), size(str_epochs, 2));
-fprintf('%s%*s | %-*s\n', left_margin, col1_width, header1, col2_width, header2);
-fprintf('%s%s-|- %s\n', left_margin, repmat('-', 1, col1_width), repmat('-', 1, col2_width));
-for i = 1:num_bands_to_process
-    fprintf('%s%*s | %-*s\n', left_margin, col1_width, str_freqs(i,:), col2_width, str_epochs(i,:));
-end
+disp(['Processing ' num2str(num_bands_to_process) ' wavelet bands...']);
 
 disp([newline 'Excluding ', num2str(lowest_wavelet_bands_to_exclude), ' wavelet bands with upper frequency < ' num2str(lowcut_frequency) ' Hz.']);
 
@@ -694,13 +683,14 @@ end
 disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
 disp(['Mean ENOVA: ' num2str(round(mean_ENOVA, 2, 'significant'))]);
 
-% Display per-band ENOVA with center frequencies
+% Display combined per-band information: epoch sizes and ENOVA scores
 disp(' ');
-disp('Per-Band ENOVA Scores:');
+disp('Per-Band Processing Summary:');
 left_margin = '  ';
 header1 = 'Band';
 header2 = 'Center Freq (Hz)';
-header3 = 'Mean ENOVA';
+header3 = 'Epoch Size (s)';
+header4 = 'Mean ENOVA';
 
 % Prepare data for display
 band_names = cell(1, length(mean_ENOVA_per_band));
@@ -716,6 +706,13 @@ for i = 1:num_bands_to_process
     freq_strings{i+1} = sprintf('%.2g', center_frequencies(i));
 end
 
+% Create epoch size strings
+epoch_strings = cell(1, length(mean_ENOVA_per_band));
+epoch_strings{1} = sprintf('%.2g', broadband_epoch_size);  % Broadband epoch size
+for i = 1:num_bands_to_process
+    epoch_strings{i+1} = sprintf('%.2g', epoch_sizes_per_wavelet_band(i));
+end
+
 % Create ENOVA strings
 enova_strings = cell(1, length(mean_ENOVA_per_band));
 for i = 1:length(mean_ENOVA_per_band)
@@ -725,15 +722,16 @@ end
 % Calculate column widths
 col1_width = max([length(header1), cellfun(@length, band_names)]);
 col2_width = max([length(header2), cellfun(@length, freq_strings)]);
-col3_width = max([length(header3), cellfun(@length, enova_strings)]);
+col3_width = max([length(header3), cellfun(@length, epoch_strings)]);
+col4_width = max([length(header4), cellfun(@length, enova_strings)]);
 
 % Print header
-fprintf('%s%-*s | %-*s | %-*s\n', left_margin, col1_width, header1, col2_width, header2, col3_width, header3);
-fprintf('%s%s-|-%s-|-%s\n', left_margin, repmat('-', 1, col1_width), repmat('-', 1, col2_width), repmat('-', 1, col3_width));
+fprintf('%s%-*s | %-*s | %-*s | %-*s\n', left_margin, col1_width, header1, col2_width, header2, col3_width, header3, col4_width, header4);
+fprintf('%s%s-|-%s-|-%s-|-%s\n', left_margin, repmat('-', 1, col1_width), repmat('-', 1, col2_width), repmat('-', 1, col3_width), repmat('-', 1, col4_width));
 
 % Print data rows
 for i = 1:length(mean_ENOVA_per_band)
-    fprintf('%s%-*s | %-*s | %-*s\n', left_margin, col1_width, band_names{i}, col2_width, freq_strings{i}, col3_width, enova_strings{i});
+    fprintf('%s%-*s | %-*s | %-*s | %-*s\n', left_margin, col1_width, band_names{i}, col2_width, freq_strings{i}, col3_width, epoch_strings{i}, col4_width, enova_strings{i});
 end
 disp(' ');
 

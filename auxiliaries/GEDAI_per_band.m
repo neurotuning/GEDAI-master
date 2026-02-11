@@ -67,10 +67,10 @@ EEGdata_epoched_2 = reshape(eeg_data_2, N_EEG_electrodes, epoch_samples, []);
 COV = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs, 'like', eeg_data);
 COV_2 = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs-1, 'like', eeg_data);
 for epo=1:N_epochs-1
-    COV(:,:,epo) = cov(EEGdata_epoched(:,:,epo)');
-    COV_2(:,:,epo) = cov(EEGdata_epoched_2(:,:,epo)');
+    COV(:,:,epo) = oas_cov(EEGdata_epoched(:,:,epo)');
+    COV_2(:,:,epo) = oas_cov(EEGdata_epoched_2(:,:,epo)');
 end
-COV(:,:,N_epochs) = cov(EEGdata_epoched(:,:,N_epochs)');
+COV(:,:,N_epochs) = oas_cov(EEGdata_epoched(:,:,N_epochs)');
 %% Generalized Eigendecomposition (GEVD)
 regularization_lambda = 0.05;
 refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*mean(eig(refCOV))*eye(N_EEG_electrodes, 'like', refCOV);

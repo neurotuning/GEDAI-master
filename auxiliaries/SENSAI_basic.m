@@ -44,14 +44,14 @@ NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
 ENOVA_per_epoch = zeros(1, num_epochs);
 for epoch = 1:num_epochs
     % SIGNAL SUBSPACE
-    cov_signal_EEG = cov(signal_EEG_epoched(:,:,epoch)');
+    cov_signal_EEG = oas_cov(signal_EEG_epoched(:,:,epoch)');
     [evecs_signal_EEG, evals_signal_EEG] = eig(cov_signal_EEG);
     [~, sidxS_signal_EEG] = sort(diag(evals_signal_EEG), 'descend');
     evecs_signal_EEG = evecs_signal_EEG(:, sidxS_signal_EEG(1:top_PCs));
     SIGNAL_subspace_angles = subspace_angles(evecs_signal_EEG, evecs_Template_cov);
     SIGNAL_subspace_similarity_distribution(epoch) = prod(cos(SIGNAL_subspace_angles));
     % NOISE SUBSPACE
-    cov_noise = cov(noise_EEG_epoched(:,:,epoch)');
+    cov_noise = oas_cov(noise_EEG_epoched(:,:,epoch)');
     [evecs_noise, evals_noise] = eig(cov_noise);
     [~, sidxS_noise] = sort(diag(evals_noise), 'descend');
     evecs_noise = evecs_noise(:, sidxS_noise(1:top_PCs));

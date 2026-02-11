@@ -35,7 +35,7 @@ NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
 
 for epoch = 1:num_epochs
     % SIGNAL SUBSPACE similarity
-    cov_EEGout = cov(EEGout_epoched(:,:,epoch)');
+    cov_EEGout = oas_cov(EEGout_epoched(:,:,epoch)');
     [evecs_EEGout, evals_EEGout] = eig(cov_EEGout);
     [~, sidxS_EEGout] = sort(diag(evals_EEGout), 'descend');
     evecs_EEGout = evecs_EEGout(:, sidxS_EEGout(1:top_PCs));
@@ -43,7 +43,7 @@ for epoch = 1:num_epochs
     SIGNAL_subspace_similarity_distribution(epoch) = prod(cos(SIGNAL_subspace_angles));
 
     % NOISE SUBSPACE similarity
-    cov_residual = cov(residual_epoched(:,:,epoch)');
+    cov_residual = oas_cov(residual_epoched(:,:,epoch)');
     [evecs_residual, evals_residual] = eig(cov_residual);
     [~, sidxS_residual] = sort(diag(evals_residual), 'descend');
     evecs_residual = evecs_residual(:, sidxS_residual(1:top_PCs));
