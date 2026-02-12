@@ -72,18 +72,16 @@ for epo=1:N_epochs-1
 end
 COV(:,:,N_epochs) = oas_cov(EEGdata_epoched(:,:,N_epochs)');
 %% Generalized Eigendecomposition (GEVD)
-regularization_lambda = 0.05;
-mu = trace(refCOV) / N_EEG_electrodes;
-refCOV_reg = (1 - regularization_lambda) * refCOV + (regularization_lambda * mu) * eye(N_EEG_electrodes, 'like', refCOV);
+
 Evec = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs, 'like', eeg_data);
 Eval = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs, 'like', eeg_data);
 Evec_2 = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs-1, 'like', eeg_data);
 Eval_2 = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs-1, 'like', eeg_data);
 for i=1:N_epochs-1
-    [Evec(:,:,i), Eval(:,:,i)] = eig(COV(:,:,i), refCOV_reg, 'chol');
-    [Evec_2(:,:,i), Eval_2(:,:,i)] = eig(COV_2(:,:,i), refCOV_reg, 'chol');
+    [Evec(:,:,i), Eval(:,:,i)] = eig(COV(:,:,i), refCOV, 'chol');
+    [Evec_2(:,:,i), Eval_2(:,:,i)] = eig(COV_2(:,:,i), refCOV, 'chol');
 end
-[Evec(:,:,N_epochs), Eval(:,:,N_epochs)] = eig(COV(:,:,N_epochs), refCOV_reg, 'chol');
+[Evec(:,:,N_epochs), Eval(:,:,N_epochs)] = eig(COV(:,:,N_epochs), refCOV, 'chol');
 
 
 %% Determine Artifact Threshold and Clean EEG

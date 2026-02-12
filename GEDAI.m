@@ -214,19 +214,7 @@ else
 
 
 
-            % Calculate the condition number
-            c = cond(refCOV);
 
-            fprintf('refCOV Condition Number: %.2f\n', c);
-
-            % Interpretation
-            if c > 1e6
-            fprintf('Status: refCOV Highly Unstable. Small noise will flip your eigenvectors.\n');
-            elseif c > 1e3
-            fprintf('Status: refCOV Moderately Unstable. Regularization recommended.\n');
-            else
-            fprintf('Status: refCOV Stable.\n');
-            end
 
         case 'interpolated'
     % 1. Verification of Spatial Locations
@@ -255,23 +243,42 @@ else
         interpolated_EEG = interp_mont_GEDAI(leadfield_EEG, EEGavRef.chanlocs);
         refCOV = interpolated_EEG.data * interpolated_EEG.data';
 
-                % Calculate the condition number
-            c = cond(refCOV);
 
-            fprintf('refCOV Condition Number: %.2f\n', c);
-
-            % Interpretation
-            if c > 1e6
-            fprintf('Status: refCOV Highly Unstable. Small noise will flip your eigenvectors.\n');
-            elseif c > 1e3
-            fprintf('Status: refCOV Moderately Unstable. Regularization recommended.\n');
-            else
-            fprintf('Status: refCOV Stable.\n');
-            end
     end
 
 
     end
+    end
+
+% Check Condition Number of refCOV (Applies to all types: Custom, Precomputed, Interpolated)
+c = cond(refCOV);
+fprintf('refCOV Condition Number: %.2f\n', c);
+
+if c > 1e3
+    fprintf('Status: refCOV Unstable (cond > 1000). Starting iterative regularization...\n');
+    
+    N_EEG_electrodes = size(refCOV, 1);
+    mu = trace(refCOV) / N_EEG_electrodes;
+    refCOV_orig = refCOV;
+    
+    for lambda = 0.01:0.01:0.1
+        % Regularize using shrinkage formula
+        refCOV = (1 - lambda) * refCOV_orig + (lambda * mu) * eye(N_EEG_electrodes, 'like', refCOV_orig);
+        
+        c = cond(refCOV);
+        fprintf('  Lambda=%.2f, New Condition Number: %.2f\n', lambda, c);
+        
+        if c <= 1e3
+            fprintf('  Success! refCOV stabilized.\n');
+            break;
+        end
+    end
+    
+    if c > 1e3
+        fprintf('  Warning: refCOV still unstable after max regularization (lambda=0.1).\n');
+    end
+else
+    fprintf('Status: refCOV Stable.\n');
 end
 % --- Wavelet-based High-Pass Filtering ---
 % Calculate required level to resolve lowcut_frequency
