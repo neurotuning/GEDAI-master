@@ -280,6 +280,42 @@ if c > 1e3
 else
     fprintf('Status: refCOV Stable.\n');
 end
+
+%apply minimum Tikhonov regularization
+    lambda=0.01; % default=0.01
+    N_EEG_electrodes = size(refCOV, 1);
+    mu = trace(refCOV) / N_EEG_electrodes;
+    refCOV = (1 - lambda) * refCOV + (lambda * mu) * eye(N_EEG_electrodes, 'like', refCOV);
+
+% Check Condition Number of refCOV (Applies to all types: Custom, Precomputed, Interpolated)
+c = cond(refCOV);
+fprintf('refCOV Condition Number: %.2f\n', c);
+
+if c > 1e3
+    fprintf('Status: refCOV Unstable (cond > 1000). Starting iterative regularization...\n');
+    
+
+    refCOV_orig = refCOV;
+    
+    for lambda = 0.02:0.01:0.2
+        % Regularize using shrinkage formula
+        refCOV = (1 - lambda) * refCOV_orig + (lambda * mu) * eye(N_EEG_electrodes, 'like', refCOV_orig);
+        
+        c = cond(refCOV);
+        fprintf('  Lambda=%.2f, New Condition Number: %.2f\n', lambda, c);
+        
+        if c <= 1e3
+            fprintf('  Success! refCOV stabilized.\n');
+            break;
+        end
+    end
+    
+    if c > 1e3
+        fprintf('  Warning: refCOV still unstable after max regularization (lambda=0.1).\n');
+    end
+else
+    fprintf('Status: refCOV Stable.\n');
+end
 % --- Wavelet-based High-Pass Filtering ---
 % Calculate required level to resolve lowcut_frequency
 highpass_frequency=0.1;
@@ -354,7 +390,7 @@ clear mra_hp
 disp([newline 'SENSAI threshold detection...please wait']);
 broadband_optimization_type = 'parabolic';
 broadband_artifact_threshold_type = 'auto-';
-broadband_minThreshold = -6;
+broadband_minThreshold = 0;
 broadband_maxThreshold = 12;
 [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, mean_ENOVA_broadband, ENOVA_per_epoch_broadband] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, broadband_minThreshold, broadband_maxThreshold);
 
