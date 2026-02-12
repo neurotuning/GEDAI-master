@@ -96,7 +96,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type, use_modwtdetails)
 
 if nargin < 2 || isempty(artifact_threshold_type)
     artifact_threshold_type = 'auto';
@@ -121,6 +121,9 @@ if nargin < 8 || isempty(ENOVA_threshold)
 end
 if nargin < 9 || isempty(signal_type)
     signal_type = 'eeg';
+end
+if nargin < 10 || isempty(use_modwtdetails)
+    use_modwtdetails = false; % Default to custom MODWT
 end
 % Validate signal_type
 if ~ismember(lower(signal_type), {'eeg', 'meg'})
@@ -236,12 +239,19 @@ end
 % --- Wavelet-based High-Pass Filtering ---
 % Calculate required level to resolve lowcut_frequency
 highpass_frequency=0.1;
-hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
-% Limit to maximum possible level given data length
-max_possible_level = floor(log2(size(EEGavRef.data, 2)));
-hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
-% Ensure reasonable minimum
-hp_wavelet_levels = max(hp_wavelet_levels, 3);
+if use_modwtdetails
+    % Wavelet packet: use level 6 for consistency with per-band processing
+    hp_wavelet_levels = 6;
+    disp('High-pass filtering: Using wavelet packet level 6');
+else
+    % Custom MODWT: dynamic level calculation
+    hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
+    % Limit to maximum possible level given data length
+    max_possible_level = floor(log2(size(EEGavRef.data, 2)));
+    hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
+    % Ensure reasonable minimum
+    hp_wavelet_levels = max(hp_wavelet_levels, 3);
+end
 wavelet_type = 'haar';
 
 % Decompose the signal
@@ -250,45 +260,48 @@ success = false;
 
 disp([newline 'Wavelet high-pass filtering > ' num2str(highpass_frequency) 'Hz']);
 warning('off');
-% Attempt GPU Processing
-if gpuDeviceCount > 0
-    try
-        disp('Attempting GPU processing (Double Precision)...');
-        data_gpu = gpuArray(EEGavRef.data');
-        wpt_hp = modwt_custom(data_gpu, wavelet_type, hp_wavelet_levels);
-        mra_hp = gather(modwtmra_custom(wpt_hp, wavelet_type)); 
-        clear data_gpu wpt_hp;
-        success = true;
-    catch 
-        warning('GPU (Double) failed: %s. Attempting GPU (Single Precision)...');
+
+    % Use custom MODWT functions
+    success = false;
+    
+    % Attempt GPU Processing
+    if gpuDeviceCount > 0
         try
-            data_gpu = gpuArray(single(EEGavRef.data'));
+            disp('Attempting GPU processing (Double Precision)...');
+            data_gpu = gpuArray(EEGavRef.data');
             wpt_hp = modwt_custom(data_gpu, wavelet_type, hp_wavelet_levels);
             mra_hp = gather(modwtmra_custom(wpt_hp, wavelet_type)); 
             clear data_gpu wpt_hp;
             success = true;
         catch 
-            warning('GPU (Single) failed: %s. Falling back to CPU.');
+            warning('GPU (Double) failed: %s. Attempting GPU (Single Precision)...');
+            try
+                data_gpu = gpuArray(single(EEGavRef.data'));
+                wpt_hp = modwt_custom(data_gpu, wavelet_type, hp_wavelet_levels);
+                mra_hp = gather(modwtmra_custom(wpt_hp, wavelet_type)); 
+                clear data_gpu wpt_hp;
+                success = true;
+            catch 
+                warning('GPU (Single) failed: %s. Falling back to CPU.');
+            end
         end
     end
-end
-
-% Fallback to CPU if GPU failed or unavailable
-if ~success
-    try
-        disp('Attempting CPU processing (Double Precision)...');
-        wpt_hp = modwt_custom(EEGavRef.data', wavelet_type, hp_wavelet_levels);
-        mra_hp = modwtmra_custom(wpt_hp, wavelet_type);
-        clear wpt_hp;
-    catch 
-        warning('CPU (Double) failed: %s. Attempting CPU (Single Precision)...');
-        % Single precision fallback for OOM
-        wpt_hp = modwt_custom(single(EEGavRef.data'), wavelet_type, hp_wavelet_levels);
-        mra_hp = modwtmra_custom(wpt_hp, wavelet_type);
-        clear wpt_hp;
+    
+    % Fallback to CPU if GPU failed or unavailable
+    if ~success
+        try
+            disp('Attempting CPU processing (Double Precision)...');
+            wpt_hp = modwt_custom(EEGavRef.data', wavelet_type, hp_wavelet_levels);
+            mra_hp = modwtmra_custom(wpt_hp, wavelet_type);
+            clear wpt_hp;
+        catch 
+            warning('CPU (Double) failed: %s. Attempting CPU (Single Precision)...');
+            % Single precision fallback for OOM
+            wpt_hp = modwt_custom(single(EEGavRef.data'), wavelet_type, hp_wavelet_levels);
+            mra_hp = modwtmra_custom(wpt_hp, wavelet_type);
+            clear wpt_hp;
+        end
     end
-end
-
 % Identify wavelet bands to remove based on lowcut_frequency (VECTORIZED)
 srate = EEGavRef.srate;
 num_bands_hp = size(mra_hp, 1);
@@ -319,8 +332,24 @@ number_of_wavelet_bands = 9; % Default number of wavelet bands = 9
 
 % OPTIMIZATION: Eliminated full wpt_EEG storage - bands will be extracted incrementally
 number_of_discrete_wavelet_bands = number_of_wavelet_bands;
-% Actual decomposition level needed to create number_of_discrete_wavelet_bands
-actual_decomposition_level = number_of_discrete_wavelet_bands - 1;  % MODWT creates level+1 bands
+% Determine decomposition level and number of bands based on method
+if use_modwtdetails
+    % Wavelet packet: use level 5 for wider frequency resolution (~3.1 Hz)
+    actual_decomposition_level = 5;
+    number_of_discrete_wavelet_bands = 2^actual_decomposition_level; % 32 bands total
+    
+    % Calculate number of bands for 0-65 Hz range
+    bandwidth_per_band = srate / (2^(actual_decomposition_level + 1));
+    num_bands_65Hz = ceil(65 / bandwidth_per_band);
+    num_bands_65Hz = min(num_bands_65Hz, number_of_discrete_wavelet_bands);
+    
+    fprintf('Wavelet Packet: Level %d, %d bands (%.2f Hz bandwidth each), covering 0-%.1f Hz\n', ...
+        actual_decomposition_level, num_bands_65Hz, bandwidth_per_band, num_bands_65Hz * bandwidth_per_band);
+else
+    % Custom MODWT: use level 8 (creates 9 bands)
+    actual_decomposition_level = 8;
+    num_bands_to_process = number_of_wavelet_bands;
+end
 
 % MEMORY OPTIMIZED: Clear source data immediately (no longer needed for full decomposition)
 clear cleaned_broadband_data;
@@ -330,34 +359,69 @@ srate = EEGavRef.srate;
 center_frequencies = zeros(1, number_of_discrete_wavelet_bands);
 lower_frequencies = zeros(1, number_of_discrete_wavelet_bands);
 upper_frequencies = zeros(1, number_of_discrete_wavelet_bands);
-for f = 1:number_of_discrete_wavelet_bands
-    % The passband for MRA band 'f' is approx. [Fs/(2^(f+1)), Fs/(2^f)]
-    lower_bound = srate / (2^(f + 1));
-    upper_bound = srate / (2^f);
-    center_frequencies(f) = (lower_bound + upper_bound) / 2;
-    lower_frequencies(f) = lower_bound; 
-    upper_frequencies(f) = upper_bound;
+
+if use_modwtdetails
+    % Linear spacing (Low -> High)
+    bw = srate / (2^(actual_decomposition_level + 1));
+    for f = 1:number_of_discrete_wavelet_bands
+        lower_frequencies(f) = (f-1) * bw;
+        upper_frequencies(f) = f * bw;
+        center_frequencies(f) = (lower_frequencies(f) + upper_frequencies(f)) / 2;
+    end
+    
+    % We process 1..num_bands_65Hz. No "lowest" bands to exclude (Band 1 is DC/Low).
+    lowest_wavelet_bands_to_exclude = 0; 
+    num_bands_to_process = num_bands_65Hz;
+else
+    % Dyadic spacing (High -> Low)
+    for f = 1:number_of_discrete_wavelet_bands
+        % The passband for MRA band 'f' is approx. [Fs/(2^(f+1)), Fs/(2^f)]
+        lower_bound = srate / (2^(f + 1));
+        upper_bound = srate / (2^f);
+        center_frequencies(f) = (lower_bound + upper_bound) / 2;
+        lower_frequencies(f) = lower_bound; 
+        upper_frequencies(f) = upper_bound;
+    end
+    
+    lowest_wavelet_bands_to_exclude = sum(upper_frequencies <= lowcut_frequency);
+    num_bands_to_process = number_of_discrete_wavelet_bands - lowest_wavelet_bands_to_exclude;
 end
 
-
-lowest_wavelet_bands_to_exclude = sum(upper_frequencies <= lowcut_frequency); 
-num_bands_to_process = number_of_discrete_wavelet_bands - lowest_wavelet_bands_to_exclude;
-
+% --- Check if data is long enough for the lowest frequency epoch size---
 % --- Check if data is long enough for the lowest frequency epoch size---
 if num_bands_to_process > 0
-    lowest_band_to_process_idx = num_bands_to_process;
-    epoch_size_lowest_band = epoch_size_in_cycles / lower_frequencies(lowest_band_to_process_idx);
+    % Identify the index of the lowest frequency band being processed
+    if use_modwtdetails
+         % Wavelet Packet (Low->High): Lowest frequency is at Index 1
+         lowest_band_to_process_idx = 1;
+         % Handle 0 Hz lower bound
+         freq_for_epoch = lower_frequencies(lowest_band_to_process_idx);
+         if freq_for_epoch == 0, freq_for_epoch = center_frequencies(lowest_band_to_process_idx); end
+         epoch_size_lowest_band = epoch_size_in_cycles / freq_for_epoch;
+    else
+         % MODWT (High->Low): Lowest frequency is at the last index
+         lowest_band_to_process_idx = num_bands_to_process;
+         epoch_size_lowest_band = epoch_size_in_cycles / lower_frequencies(lowest_band_to_process_idx);
+    end
+
     required_samples = epoch_size_lowest_band * srate;
 
     while required_samples > size(EEGavRef.data, 2) && num_bands_to_process > 0
-        warning('GEDAI:InsufficientData', 'EEG data length is too short for the epoch size required by the lowest frequency band (%g Hz). Increasing lowcut_frequency.', center_frequencies(lowest_band_to_process_idx));
-        lowcut_frequency = upper_frequencies(lowest_band_to_process_idx);
-        lowest_wavelet_bands_to_exclude = sum(upper_frequencies <= lowcut_frequency);
-        num_bands_to_process = number_of_discrete_wavelet_bands - lowest_wavelet_bands_to_exclude;
-        
-        lowest_band_to_process_idx = num_bands_to_process;
-        epoch_size_lowest_band = epoch_size_in_cycles / lower_frequencies(lowest_band_to_process_idx);
-        required_samples = epoch_size_lowest_band * srate;
+        if use_modwtdetails
+            % For WP, handling this dynamic reduction is complex due to fixed lowcut logic.
+            % Just warn and break for now to avoid incorrect band removal.
+            warning('GEDAI:InsufficientData', 'EEG data length is too short for the lowest frequency band (%.2f Hz). Analysis may be suboptimal.', center_frequencies(lowest_band_to_process_idx));
+            break; 
+        else
+            warning('GEDAI:InsufficientData', 'EEG data length is too short for the epoch size required by the lowest frequency band (%g Hz). Increasing lowcut_frequency.', center_frequencies(lowest_band_to_process_idx));
+            lowcut_frequency = upper_frequencies(lowest_band_to_process_idx);
+            lowest_wavelet_bands_to_exclude = sum(upper_frequencies <= lowcut_frequency);
+            num_bands_to_process = number_of_discrete_wavelet_bands - lowest_wavelet_bands_to_exclude;
+            
+            lowest_band_to_process_idx = num_bands_to_process;
+            epoch_size_lowest_band = epoch_size_in_cycles / lower_frequencies(lowest_band_to_process_idx);
+            required_samples = epoch_size_lowest_band * srate;
+        end
     end
 end
 
@@ -365,14 +429,20 @@ end
 
 % Calculate the ideal epoch size for each band based on the rule
 epoch_sizes_per_wavelet_band = epoch_size_in_cycles ./ lower_frequencies;
+if use_modwtdetails
+    % Correction for Band 1 (0 Hz lower bound), use center frequency instead
+    if lower_frequencies(1) == 0
+         epoch_sizes_per_wavelet_band(1) = epoch_size_in_cycles / center_frequencies(1);
+    end
+end
 
 % --- Display wavelet band-widths and epoch sizes ---
 disp(' '); 
 left_margin = '  '; 
 header1 = 'Wavelet Center Freq (Hz)';
 header2 = 'Epoch Size (s)';
-str_freqs = num2str(center_frequencies(1:num_bands_to_process)', '%.2g');
-str_epochs = num2str(epoch_sizes_per_wavelet_band(1:num_bands_to_process)', '%.2g');
+str_freqs = num2str(center_frequencies(1:num_bands_to_process)', '%.2f');
+str_epochs = num2str(epoch_sizes_per_wavelet_band(1:num_bands_to_process)', '%.2f');
 col1_width = max(length(header1), size(str_freqs, 2));
 col2_width = max(length(header2), size(str_epochs, 2));
 fprintf('%s%*s | %-*s\n', left_margin, col1_width, header1, col2_width, header2);
@@ -417,9 +487,45 @@ if parallel
         temp_cleaned_bands = cell(1, num_bands_to_process);  % MEMORY OPTIMIZED: Use cell array for temporary storage
         
         % MEMORY OPTIMIZED: Incremental band extraction in parallel
+        % MEMORY OPTIMIZED: Incremental band extraction in parallel
+        if use_modwtdetails
+            % Pre-compute all bands using modwptdetails (process channels in parallel)
+            [n_samp, n_chan] = size(unfiltered_data);
+            num_packets_total = 2^actual_decomposition_level;
+            all_details = zeros(num_packets_total, n_samp, n_chan, 'like', unfiltered_data);
+            
+            parfor ch = 1:n_chan
+                % Use signal (default column vector) as input to modwptdetails to avoid 1-D error
+                % If unfiltered_data(:, ch) is column vector, modwptdetails output is Samples x Packets
+                % But modwptdetails actually returns Packets x Samples even for column input
+                details_SxP = gather(modwptdetails(unfiltered_data(:, ch), wavelet_type, actual_decomposition_level));
+                all_details(:, :, ch) = details_SxP; 
+            end
+        end
+        
         parfor f = 1:num_bands_to_process
             % Extract single band on-the-fly (no full wpt_EEG storage)
-            wavelet_data_band = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
+            if use_modwtdetails
+                % Extract f-th band for all channels: result is num_samples x num_channels
+                % We need to transpose to get channels x samples
+                band_data = squeeze(all_details(f, :, :));
+                if size(band_data, 2) ~= n_chan
+                     % Handle squeeze edge case for single channel
+                     if n_chan == 1
+                         wavelet_data_band = band_data'; 
+                     else
+                         % Squeeze might have rotated if dimensions match nicely, ensure sample x chan
+                         wavelet_data_band = band_data';
+                     end
+                else
+                     wavelet_data_band = band_data';
+                end
+                
+                % Robust way:
+                wavelet_data_band = reshape(all_details(f, :, :), [n_samp, n_chan])'; 
+            else
+                wavelet_data_band = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
+            end
             
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             try
@@ -458,9 +564,27 @@ if ~parallel || ~success_parallel
     
     try
         % MEMORY OPTIMIZED: Sequential processing with incremental band extraction
+        % MEMORY OPTIMIZED: Sequential processing with incremental band extraction
+        if use_modwtdetails
+            % Pre-compute all bands using modwptdetails
+            [n_samp, n_chan] = size(unfiltered_data);
+            num_packets_total = 2^actual_decomposition_level;
+            all_details = zeros(num_packets_total, n_samp, n_chan, 'like', unfiltered_data);
+            
+            parfor ch = 1:n_chan
+                % Use signal (default column vector) as input to modwptdetails
+                details_SxP = gather(modwptdetails(unfiltered_data(:, ch), wavelet_type, actual_decomposition_level));
+                all_details(:, :, ch) = details_SxP; 
+            end
+        end
+        
         for f = 1:num_bands_to_process
             % Extract single band on-the-fly (no full wpt_EEG storage)
-            wavelet_data_band = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
+            if use_modwtdetails
+                wavelet_data_band = reshape(all_details(f, :, :), [n_samp, n_chan])';
+            else
+                wavelet_data_band = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
+            end
             
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             try
@@ -486,9 +610,26 @@ if ~parallel || ~success_parallel
     
     if ~success_serial
          disp('Executing Last Resort: Single Precision Non-Parallel Processing...');
+         if use_modwtdetails
+             % Pre-compute all bands using modwptdetails
+             [n_samp, n_chan] = size(unfiltered_data);
+             num_packets_total = 2^actual_decomposition_level;
+             all_details = zeros(num_packets_total, n_samp, n_chan, 'single'); % Single precision
+             
+             parfor ch = 1:n_chan
+                 % Use signal (default column vector) as input to modwptdetails
+                 details_SxP = gather(modwptdetails(single(unfiltered_data(:, ch)), wavelet_type, actual_decomposition_level));
+                 all_details(:, :, ch) = details_SxP;
+             end
+         end
+         
          for f = 1:num_bands_to_process
             % Extract single band on-the-fly (no full wpt_EEG storage)
-            wavelet_data_band = modwt_single_band(single(unfiltered_data), wavelet_type, actual_decomposition_level, f)';
+            if use_modwtdetails
+                wavelet_data_band = reshape(all_details(f, :, :), [n_samp, n_chan])';
+            else
+                wavelet_data_band = modwt_single_band(single(unfiltered_data), wavelet_type, actual_decomposition_level, f)';
+            end
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             
             [cleaned_band_data, ~, sensai_val, thresh_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false);
@@ -545,8 +686,8 @@ tEnd = toc(tStart);
 if ~ischar(ref_matrix_type)
     ref_matrix_type = 'custom';
 end
-com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, ''%s'');', ...
-    artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallel, visualize_artifacts, num2str(ENOVA_threshold), signal_type);
+com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, ''%s'', %d);', ...
+    artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallel, visualize_artifacts, num2str(ENOVA_threshold), signal_type, use_modwtdetails);
 
 if visualize_artifacts
     EEGclean_for_vis = EEGclean;

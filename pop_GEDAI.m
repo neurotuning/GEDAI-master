@@ -41,8 +41,9 @@ uilist = { ...
     {} ...
     {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1}, ...
     {'style' 'text' 'string' 'Artifact visualization (from ASR):'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1}, ...
+    {'style' 'text' 'string' 'Use wavelet packet transform (modwpt):'} {'style' 'checkbox' 'string' '' 'tag' 'use_modwtdetails' 'Value' 0}, ...
 };
-geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] };
+geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1, 1] };
 title = '  GEDAI denoising |  v1.4  ';
 
 % Get user input
@@ -65,8 +66,9 @@ end
 
 use_parallel = logical(out.parallel_processing);
 visualize_artifacts = logical(out.visualization_A);
+use_modwtdetails = logical(out.use_modwtdetails);
 
-[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold);
+[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold, 'eeg', use_modwtdetails);
   
 EEG = eegh(com, EEG); % update EEG.history
     

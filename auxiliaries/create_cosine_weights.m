@@ -30,11 +30,17 @@ function [weights] = create_cosine_weights(channels, srate, epoch_size, fullshif
 % CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 % ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
 % THE POSSIBILITY OF SUCH DAMAGE.
-cosine_weights=zeros(channels,srate*epoch_size);
-
-    %creating the weights (depending on odd or even)
-    % Creating the weights (vectorized)
-    target_samples = srate * epoch_size;
+    % Debugging inputs
+    % fprintf('DEBUG: channels=%g, srate=%g, epoch_size=%g\n', channels, srate, epoch_size);
+    
+    % Force dimensions to be strict integers using floor and double conversion
+    target_samples = double(int64(srate * epoch_size)); 
+    if target_samples == 0, target_samples = 1; end % Avoid zero size
+    
+    channels = double(int64(channels));
+    
+    cosine_weights = zeros(channels, target_samples);
+    
     samples = target_samples;
     if ~fullshift 
        samples = samples - 1; 
@@ -43,9 +49,9 @@ cosine_weights=zeros(channels,srate*epoch_size);
     % Generate cosine window for one channel
     u = 1:samples;
     if fullshift
-        cos_window = 0.5 - 0.5 * cos(2 * u * pi / (srate * epoch_size));
+        cos_window = 0.5 - 0.5 * cos(2 * u * pi / (target_samples));
     else
-        cos_window = 0.5 - 0.5 * cos(2 * u * pi / (srate * epoch_size - 1));
+        cos_window = 0.5 - 0.5 * cos(2 * u * pi / (target_samples - 1));
     end
     
     % Replicate for all channels

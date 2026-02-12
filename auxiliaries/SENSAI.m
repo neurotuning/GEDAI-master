@@ -18,7 +18,7 @@ function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] =
 %% Estimate Signal Quality
 top_PCs = 3;
 num_chans = size(refCOV, 1);
-epoch_samples = srate * epoch_size;
+epoch_samples = round(srate * epoch_size);
 
 % Top eigenvectors of reference covariance
 [evecs_Template_cov, evals_Template_cov] = eig(refCOV);

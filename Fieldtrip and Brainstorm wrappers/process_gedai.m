@@ -84,11 +84,17 @@ function sProcess = GetDescription() %#ok<DEFNU>
     sProcess.options.enova_threshold.Type    = 'value';
     sProcess.options.enova_threshold.Value   = {0.9, '', 2};
     sProcess.options.enova_threshold.Class   = 'enova';
+    % === Use modwtdetails
+    sProcess.options.label5.Comment = '<BR>';
+    sProcess.options.label5.Type    = 'label';
+    sProcess.options.use_modwtdetails.Comment = 'Use wavelet packet transform (modwpt)';
+    sProcess.options.use_modwtdetails.Type    = 'checkbox';
+    sProcess.options.use_modwtdetails.Value   = 0;
 end
 
 
 %% ===== GET OPTIONS =====
-function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold] = GetOptions(sProcess)
+function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, use_modwpt] = GetOptions(sProcess)
     % Artifact threshold type
     artifact_threshold_type = sProcess.options.artifact_threshold_type.Value;
     % Epoch size in cycles
@@ -114,13 +120,22 @@ function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_m
     else
         enova_threshold = [];
     end
+    % Use modwtdetails
+    use_modwpt = sProcess.options.use_modwtdetails.Value;
 end
 
 
 %% ===== FORMAT COMMENT =====
 function Comment = FormatComment(sProcess) %#ok<DEFNU>
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold] = GetOptions(sProcess);
-    Comment = ['GEDAI: ' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
+    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold, use_modwpt] = GetOptions(sProcess);
+    
+    if use_modwpt
+        wavelet_desc = 'modwpt';
+    else
+        wavelet_desc = 'modwt';
+    end
+    
+    Comment = ['GEDAI: ' wavelet_desc ', ' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
     if ~isempty(enova_threshold)
         Comment = [Comment, ', ENOVA=' num2str(enova_threshold)];
     end
@@ -141,8 +156,10 @@ function sInput = Run(sProcess, sInput) %#ok<DEFNU>
         unloadPlug = 1;
     end
     % Get options
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold] = GetOptions(sProcess);
+    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, use_modwpt] = GetOptions(sProcess);
     
+    fprintf('GEDAI> Running with use_modwpt = %d\n', use_modwpt);
+
     % Get channel file for study
     [sChannel, iStudyChannel] = bst_get('ChannelForStudy', sInput.iStudy);
     % Load channel file
@@ -273,7 +290,7 @@ function sInput = Run(sProcess, sInput) %#ok<DEFNU>
         end
         
         % Run GEDAI for MAG channels
-        EEGclean_MAG = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, signal_type);
+        EEGclean_MAG = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, signal_type, use_modwpt);
         
         % ===== Process GRAD channels =====
         fprintf('GEDAI> Processing %d GRAD channels...\n', length(grad_idx_in_filtered));
@@ -299,7 +316,7 @@ function sInput = Run(sProcess, sInput) %#ok<DEFNU>
         end
         
         % Run GEDAI for GRAD channels
-        EEGclean_GRAD = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, signal_type);
+        EEGclean_GRAD = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, signal_type, use_modwpt);
         
         % ===== Combine MAG and GRAD results =====
         % Create combined EEG structure
@@ -360,7 +377,7 @@ function sInput = Run(sProcess, sInput) %#ok<DEFNU>
         end
 
         % Run GEDAI
-        EEGclean = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, signal_type);
+        EEGclean = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, signal_type, use_modwpt);
     end
     
     % Map cleaned EEG/MEG data back to original channel positions

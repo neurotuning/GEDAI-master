@@ -20,7 +20,7 @@ refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*mean(eig(r
 %% Estimate Signal Quality
 top_PCs = 3;
 num_chans = size(refCOV, 1);
-epoch_samples = srate * epoch_size;
+epoch_samples = round(srate * epoch_size);
 % Top eigenvectors of refCOV subspace
 [evecs_Template_cov, evals_Template_cov] = eig(refCOV_reg);
 [~, sidxS_Template_cov] = sort(diag(evals_Template_cov), 'descend');

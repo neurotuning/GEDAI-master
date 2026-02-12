@@ -44,13 +44,13 @@ outliers = original_data(transformed_data > upper_PIT_threshold);
 Treshold1 = T1 * min(outliers);
 
 %% Cleaning EEG by removing outlying GEVD components
-epoch_samples = srate * epoch_size;
+epoch_samples = round(srate * epoch_size);
 artifacts = zeros(size(EEGdata_epoched), 'like', EEGdata_epoched);
 cleaned_epoched_data = zeros(size(EEGdata_epoched), 'like', EEGdata_epoched);
 if nargin < 8 || isempty(cosine_weights)
     cosine_weights = create_cosine_weights(num_chans, srate, epoch_size, 1);
 end
-half_epoch = epoch_samples/2;
+half_epoch = floor(epoch_samples/2);
 
 for i = 1:num_epochs
     component_spatial_filter = Evec(:,:,i);

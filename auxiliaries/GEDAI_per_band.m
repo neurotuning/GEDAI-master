@@ -30,7 +30,7 @@ end
 refCOV = cast(refCOV, 'like', eeg_data);
 %% Pad and Epoch Data
 pnts_original = size(eeg_data, 2); 
-epoch_samples = srate * epoch_size;
+epoch_samples = round(srate * epoch_size); % Ensure integer for reshape
 
 remainder = rem(pnts_original, epoch_samples);
 if remainder ~= 0
