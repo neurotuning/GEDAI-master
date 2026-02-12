@@ -239,11 +239,7 @@ end
 % --- Wavelet-based High-Pass Filtering ---
 % Calculate required level to resolve lowcut_frequency
 highpass_frequency=0.1;
-if use_modwtdetails
-    % Wavelet packet: use level 6 for consistency with per-band processing
-    hp_wavelet_levels = 6;
     disp('High-pass filtering: Using wavelet packet level 6');
-else
     % Custom MODWT: dynamic level calculation
     hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
     % Limit to maximum possible level given data length
@@ -251,12 +247,10 @@ else
     hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
     % Ensure reasonable minimum
     hp_wavelet_levels = max(hp_wavelet_levels, 3);
-end
 wavelet_type = 'haar';
 
 % Decompose the signal
 % Robust execution order: GPU(Double) -> GPU(Single) -> CPU(Double) -> CPU(Single)
-success = false;
 
 disp([newline 'Wavelet high-pass filtering > ' num2str(highpass_frequency) 'Hz']);
 warning('off');
@@ -506,22 +500,7 @@ if parallel
         parfor f = 1:num_bands_to_process
             % Extract single band on-the-fly (no full wpt_EEG storage)
             if use_modwtdetails
-                % Extract f-th band for all channels: result is num_samples x num_channels
-                % We need to transpose to get channels x samples
-                band_data = squeeze(all_details(f, :, :));
-                if size(band_data, 2) ~= n_chan
-                     % Handle squeeze edge case for single channel
-                     if n_chan == 1
-                         wavelet_data_band = band_data'; 
-                     else
-                         % Squeeze might have rotated if dimensions match nicely, ensure sample x chan
-                         wavelet_data_band = band_data';
-                     end
-                else
-                     wavelet_data_band = band_data';
-                end
-                
-                % Robust way:
+                             
                 wavelet_data_band = reshape(all_details(f, :, :), [n_samp, n_chan])'; 
             else
                 wavelet_data_band = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
