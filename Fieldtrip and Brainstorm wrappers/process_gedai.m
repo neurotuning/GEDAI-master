@@ -59,6 +59,10 @@ function sProcess = GetDescription() %#ok<DEFNU>
                                                 'fs_precomputed', 'fs_interpolated', 'bst_headmodel'};
     sProcess.options.ref_matrix_type.Type    = 'radio_label';
     sProcess.options.ref_matrix_type.Value   = 'bst_headmodel';
+    % === Sensor types
+    sProcess.options.sensortypes.Comment = 'Sensor types or names (empty=all): ';
+    sProcess.options.sensortypes.Type    = 'text';
+    sProcess.options.sensortypes.Value   = 'MEG, EEG';
     % === Parallel processing
     sProcess.options.label3.Comment   = '<BR>';
     sProcess.options.label3.Type      = 'label';
@@ -89,10 +93,15 @@ end
 
 
 %% ===== GET OPTIONS =====
-function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, save_artifacts] = GetOptions(sProcess)
+function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, sensortypes, parallel, visualize_artifacts, enova_threshold, save_artifacts] = GetOptions(sProcess)
     artifact_threshold_type = sProcess.options.artifact_threshold_type.Value;
     epoch_size_in_cycles    = sProcess.options.epoch_size_in_cycles.Value{1};
     lowcut_frequency        = sProcess.options.lowcut_frequency.Value{1};
+    if isfield(sProcess.options, 'sensortypes')
+        sensortypes = sProcess.options.sensortypes.Value;
+    else
+        sensortypes = '';
+    end
     switch sProcess.options.ref_matrix_type.Value
         case 'fs_precomputed',  ref_matrix_type = 'Freesurfer (precomputed)';
         case 'fs_interpolated', ref_matrix_type = 'Freesurfer (interpolated)';
@@ -115,8 +124,11 @@ end
 
 %% ===== FORMAT COMMENT =====
 function Comment = FormatComment(sProcess) %#ok<DEFNU>
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold, ~] = GetOptions(sProcess);
+    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, sensortypes, ~, ~, enova_threshold, ~] = GetOptions(sProcess);
     Comment = ['GEDAI: ' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
+    if ~isempty(sensortypes)
+        Comment = [Comment, ', ' sensortypes];
+    end
     if ~isempty(enova_threshold)
         Comment = [Comment, ', ENOVA=' num2str(enova_threshold)];
     end
@@ -138,7 +150,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
     end
 
     % Get options
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, save_artifacts] = GetOptions(sProcess);
+    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, sensortypes, parallel, visualize_artifacts, enova_threshold, save_artifacts] = GetOptions(sProcess);
 
     % Iterate over inputs
     for iInput = 1:length(sInputs)
@@ -193,9 +205,19 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             % =========================================================
             % STEP 2: CHANNEL SELECTION
             % =========================================================
-            eeg_meg_idx = find(ismember({ChannelMat.Channel.Type}, {'EEG', 'MEG', 'MEG MAG', 'MEG GRAD'}));
+            iChannels = channel_find(ChannelMat.Channel, sensortypes);
+            if isempty(iChannels)
+                bst_report('Error', sProcess, sInput, ['No channels matching "' sensortypes '" found.']);
+                continue;
+            end
+            
+            % Map found channels to subsets matching supported GEDAI constraints
+            ChannelSubset = ChannelMat.Channel(iChannels);
+            iMatched = find(ismember({ChannelSubset.Type}, {'EEG', 'MEG', 'MEG MAG', 'MEG GRAD'}));
+            eeg_meg_idx = iChannels(iMatched);
+            
             if isempty(eeg_meg_idx)
-                bst_report('Error', sProcess, sInput, 'No EEG or MEG channels found.');
+                bst_report('Error', sProcess, sInput, 'No EEG or MEG channels found in the specified sensor types.');
                 continue;
             end
 
@@ -203,29 +225,29 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             ChannelMatFiltered.Channel = ChannelMat.Channel(eeg_meg_idx);
 
             channel_types = {ChannelMatFiltered.Channel.Type};
-            eeg_count = sum(strcmp(channel_types, 'EEG'));
-            meg_count = sum(ismember(channel_types, {'MEG', 'MEG MAG', 'MEG GRAD'}));
 
-            if eeg_count > 0 && meg_count > 0
-                bst_report('Error', sProcess, sInput, 'Cannot process mixed EEG and MEG channels. Please process them separately.');
-                continue;
-            elseif eeg_count > 0
-                signal_type = 'eeg';
-                process_mag_grad_separately = false;
-            elseif meg_count > 0
-                signal_type = 'meg';
-                mag_count  = sum(strcmp(channel_types, 'MEG MAG'));
-                grad_count = sum(strcmp(channel_types, 'MEG GRAD'));
-                process_mag_grad_separately = (mag_count > 0 && grad_count > 0);
-            else
-                bst_report('Error', sProcess, sInput, 'No valid EEG or MEG channels detected.');
-                continue;
+            % Identify subsets to process independently
+            subsets = {};
+            if sum(strcmp(channel_types, 'EEG')) > 0
+                subsets{end+1} = {'EEG', 'eeg'};
             end
+            if sum(strcmp(channel_types, 'MEG MAG')) > 0
+                subsets{end+1} = {'MEG MAG', 'meg'};
+            end
+            if sum(strcmp(channel_types, 'MEG GRAD')) > 0
+                subsets{end+1} = {'MEG GRAD', 'meg'};
+            end
+            if sum(strcmp(channel_types, 'MEG')) > 0
+                subsets{end+1} = {'MEG', 'meg'};
+            end
+
+            sInputFiltered   = sInput;
+            sInputFiltered.A = sInput.A(eeg_meg_idx, :);
 
             % =========================================================
             % STEP 3: HEAD MODEL
             % =========================================================
-            Gain_avref = [];
+            HeadModel_Gain = [];
             if strcmp(ref_matrix_type, 'Brainstorm leadfield')
                 HeadModelFile = [];
                 sStudyData = bst_get('Study', sInput.iStudy);
@@ -248,101 +270,63 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                     continue;
                 end
 
-                HeadModel    = in_bst_headmodel(HeadModelFile, 0, 'Gain');
-                Gain_filtered = HeadModel.Gain(eeg_meg_idx, :);
-                if strcmp(signal_type, 'eeg')
-                    Gain_avref = Gain_filtered - mean(Gain_filtered, 1);
-                else
-                    Gain_avref = Gain_filtered;
-                end
+                HeadModel      = in_bst_headmodel(HeadModelFile, 0, 'Gain');
+                HeadModel_Gain = HeadModel.Gain(eeg_meg_idx, :);
             end
 
             % =========================================================
             % STEP 4: RUN GEDAI
             % =========================================================
-            if process_mag_grad_separately
-                mag_idx_in_filtered  = find(strcmp(channel_types, 'MEG MAG'));
-                grad_idx_in_filtered = find(strcmp(channel_types, 'MEG GRAD'));
+            EEGclean = brainstorm2eeglab(sInputFiltered, ChannelMatFiltered);
+            EEGartifacts = EEGclean;
+            combined_mask = true(1, size(sInputFiltered.A, 2));
+            has_mask = false;
+            first_gedai_etc = [];
 
-                sInputFiltered   = sInput;
-                sInputFiltered.A = sInput.A(eeg_meg_idx, :);
-
-                % --- MAG ---
-                ChannelMatMAG = ChannelMatFiltered;
-                ChannelMatMAG.Channel = ChannelMatFiltered.Channel(mag_idx_in_filtered);
-                sInputMAG   = sInputFiltered;
-                sInputMAG.A = sInputFiltered.A(mag_idx_in_filtered, :);
-                EEG_MAG = brainstorm2eeglab(sInputMAG, ChannelMatMAG);
-                if length(sInputMAG.TimeVector) > 1, EEG_MAG.srate = 1 / mean(diff(sInputMAG.TimeVector)); end
+            for iSub = 1:length(subsets)
+                sens_type = subsets{iSub}{1};
+                sig_type  = subsets{iSub}{2};
+                idx_in_filtered = find(strcmp(channel_types, sens_type));
+                
+                sInputSub   = sInputFiltered;
+                sInputSub.A = sInputFiltered.A(idx_in_filtered, :);
+                
+                ChannelMatSub = ChannelMatFiltered;
+                ChannelMatSub.Channel = ChannelMatFiltered.Channel(idx_in_filtered);
+                
+                EEG_Sub = brainstorm2eeglab(sInputSub, ChannelMatSub);
+                if length(sInputSub.TimeVector) > 1, EEG_Sub.srate = 1 / mean(diff(sInputSub.TimeVector)); end
+                
                 if strcmp(ref_matrix_type, 'Brainstorm leadfield')
-                    Gain_MAG = Gain_avref(mag_idx_in_filtered, :);
-                    ref_matrix_param_MAG = Gain_MAG * Gain_MAG';
-                elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
-                    ref_matrix_param_MAG = 'precomputed';
-                else
-                    ref_matrix_param_MAG = 'interpolated';
-                end
-                [EEGclean_MAG, EEGartifacts_MAG] = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, signal_type);
-
-                % --- GRAD ---
-                ChannelMatGRAD = ChannelMatFiltered;
-                ChannelMatGRAD.Channel = ChannelMatFiltered.Channel(grad_idx_in_filtered);
-                sInputGRAD   = sInputFiltered;
-                sInputGRAD.A = sInputFiltered.A(grad_idx_in_filtered, :);
-                EEG_GRAD = brainstorm2eeglab(sInputGRAD, ChannelMatGRAD);
-                if length(sInputGRAD.TimeVector) > 1, EEG_GRAD.srate = 1 / mean(diff(sInputGRAD.TimeVector)); end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
-                    Gain_GRAD = Gain_avref(grad_idx_in_filtered, :);
-                    ref_matrix_param_GRAD = Gain_GRAD * Gain_GRAD';
-                elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
-                    ref_matrix_param_GRAD = 'precomputed';
-                else
-                    ref_matrix_param_GRAD = 'interpolated';
-                end
-                [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, signal_type);
-
-                % --- Recombine ---
-                EEGclean = brainstorm2eeglab(sInputFiltered, ChannelMatFiltered);
-                EEGclean.data(mag_idx_in_filtered, :)  = EEGclean_MAG.data;
-                EEGclean.data(grad_idx_in_filtered, :) = EEGclean_GRAD.data;
-                EEGartifacts = EEGclean;
-                EEGartifacts.data(mag_idx_in_filtered, :)  = EEGartifacts_MAG.data;
-                EEGartifacts.data(grad_idx_in_filtered, :) = EEGartifacts_GRAD.data;
-
-                % Combine rejection masks
-                if isfield(EEGclean_MAG.etc, 'GEDAI') && isfield(EEGclean_MAG.etc.GEDAI, 'samples_to_keep') && ...
-                   isfield(EEGclean_GRAD.etc, 'GEDAI') && isfield(EEGclean_GRAD.etc.GEDAI, 'samples_to_keep')
-                    mask_MAG  = EEGclean_MAG.etc.GEDAI.samples_to_keep;
-                    mask_GRAD = EEGclean_GRAD.etc.GEDAI.samples_to_keep;
-                    if length(mask_MAG) == length(mask_GRAD)
-                        combined_mask = mask_MAG & mask_GRAD;
-                        EEGclean.etc.GEDAI.samples_to_keep    = combined_mask;
-                        EEGclean.etc.GEDAI.percentage_rejected = 100 * sum(~combined_mask) / length(combined_mask);
-                    else
-                        EEGclean.etc.GEDAI = EEGclean_MAG.etc.GEDAI;
+                    Gain_Sub = HeadModel_Gain(idx_in_filtered, :);
+                    if strcmp(sig_type, 'eeg')
+                        Gain_Sub = Gain_Sub - mean(Gain_Sub, 1);
                     end
-                elseif isfield(EEGclean_MAG.etc, 'GEDAI')
-                    EEGclean.etc.GEDAI = EEGclean_MAG.etc.GEDAI;
-                elseif isfield(EEGclean_GRAD.etc, 'GEDAI')
-                    EEGclean.etc.GEDAI = EEGclean_GRAD.etc.GEDAI;
-                end
-
-            else
-                % Single processing (EEG or generic MEG)
-                sInputFiltered   = sInput;
-                sInputFiltered.A = sInput.A(eeg_meg_idx, :);
-                EEG = brainstorm2eeglab(sInputFiltered, ChannelMatFiltered);
-                if length(sInputFiltered.TimeVector) > 1
-                    EEG.srate = 1 / mean(diff(sInputFiltered.TimeVector));
-                end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
-                    ref_matrix_param = Gain_avref * Gain_avref';
+                    ref_matrix_param_Sub = Gain_Sub * Gain_Sub';
                 elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
-                    ref_matrix_param = 'precomputed';
+                    ref_matrix_param_Sub = 'precomputed';
                 else
-                    ref_matrix_param = 'interpolated';
+                    ref_matrix_param_Sub = 'interpolated';
                 end
-                [EEGclean, EEGartifacts] = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, signal_type);
+                
+                [EEGclean_Sub, EEGartifacts_Sub] = GEDAI(EEG_Sub, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_Sub, parallel, visualize_artifacts, enova_threshold, sig_type);
+                
+                EEGclean.data(idx_in_filtered, :)     = EEGclean_Sub.data;
+                EEGartifacts.data(idx_in_filtered, :) = EEGartifacts_Sub.data;
+                
+                if isfield(EEGclean_Sub.etc, 'GEDAI') && isfield(EEGclean_Sub.etc.GEDAI, 'samples_to_keep')
+                    combined_mask = combined_mask & EEGclean_Sub.etc.GEDAI.samples_to_keep;
+                    has_mask = true;
+                    if isempty(first_gedai_etc)
+                        first_gedai_etc = EEGclean_Sub.etc.GEDAI;
+                    end
+                end
+            end
+            
+            if has_mask
+                EEGclean.etc.GEDAI = first_gedai_etc;
+                EEGclean.etc.GEDAI.samples_to_keep = combined_mask;
+                EEGclean.etc.GEDAI.percentage_rejected = 100 * sum(~combined_mask) / length(combined_mask);
             end
 
             % =========================================================
