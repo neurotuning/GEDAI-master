@@ -121,8 +121,8 @@ if ~exist('evecs_Template_cov', 'var')
 
 
     % Top PCs for SENSAI (separate from refCOV top PCs)
-    refCOV_ratio=(refCOV_top_PCs/6)^1/2;
-    SSI_top_PCs = round(refCOV_ratio + 3);
+    refCOV_ratio=(refCOV_top_PCs/4)^1/2;
+    SSI_top_PCs = floor(refCOV_ratio + 3);
     disp(['  SSI PCs: ' num2str(SSI_top_PCs) newline]);
 
     % Use eigs for truncated decomposition (efficiency optimization)
