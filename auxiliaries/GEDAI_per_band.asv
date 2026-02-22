@@ -87,7 +87,7 @@ end
 %% Determine Noise Multiplier and Optimization Parameters
 if ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto')
     if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5;
-    elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3;
+    elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; 
     elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6;
     else, noise_multiplier = 3; 
     end
@@ -108,22 +108,29 @@ if isnan(noise_multiplier), noise_multiplier = 3; end
 
 % Pre-calculate RefCOV eigenvectors for SENSAI
 
-if ~exist('evecs_Template_cov', 'var')
+if strcmpi(signal_type, 'eeg')
+    refCOV_top_PCs=3;
+    disp(['EEG  refCOV PCs: ' num2str(refCOV_top_PCs)]);
+    SSI_top_PCs = 3;
+    disp(['EEG  SSI PCs: ' num2str(SSI_top_PCs) newline]);
+
+elseif strcmpi(signal_type, 'meg')
     % Adaptive: minimum PCs explaining >= 70% of refCOV variance
     % Use refCOV_reg (regularized, always well-conditioned)
     % refCOV_reg=refCOV;
     all_evals_refCOV = eig(refCOV_reg);
     all_evals_refCOV = sort(all_evals_refCOV, 'descend');
     cumvar_refCOV = cumsum(all_evals_refCOV) / sum(all_evals_refCOV);
-    refCOV_top_PCs = find(cumvar_refCOV >= 0.85, 1, 'first');
+    refCOV_top_PCs = find(cumvar_refCOV >= 0.80, 1, 'first');
     refCOV_top_PCs = max(1, min(refCOV_top_PCs, N_EEG_electrodes - 1));
-    fprintf('  RefCOV PCs: %d (%.0f%% var)\n', refCOV_top_PCs, 100 * cumvar_refCOV(refCOV_top_PCs));
+    fprintf('MEG  RefCOV PCs: %d (%.0f%% var)\n', refCOV_top_PCs, 100 * cumvar_refCOV(refCOV_top_PCs));
 
 
     % Top PCs for SENSAI (separate from refCOV top PCs)
-    refCOV_ratio=(refCOV_top_PCs/4)^1/2;
-    SSI_top_PCs = floor(refCOV_ratio + 3);
-    disp(['  SSI PCs: ' num2str(SSI_top_PCs) newline]);
+    refCOV_ratio=(refCOV_top_PCs/(noise_multiplier+2.5))^1/2;
+    SSI_top_PCs = round(refCOV_ratio + 3);
+    disp(['MEG  SSI PCs: ' num2str(SSI_top_PCs) newline]);
+end
 
     % Use eigs for truncated decomposition (efficiency optimization)
     [evecs_Template_cov, evals_Template_cov] = eigs(refCOV_reg, refCOV_top_PCs);
@@ -131,7 +138,7 @@ if ~exist('evecs_Template_cov', 'var')
     % Ensure sorted order
     [~, sidxS_Template_cov] = sort(diag(evals_Template_cov), 'descend');
     evecs_Template_cov = evecs_Template_cov(:, sidxS_Template_cov);
-end
+
 
 maxThreshold = 12;
 
