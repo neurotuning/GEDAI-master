@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold)
+function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold, refCOV_top_PCs_in, SSI_top_PCs_in)
 
 if isempty(eeg_data)
     error('Cannot process empty data');
@@ -37,6 +37,14 @@ end
 % Default minThreshold if not provided
 if nargin < 10 || isempty(minThreshold)
     minThreshold = 0;
+end
+
+if nargin < 11
+    refCOV_top_PCs_in = [];
+end
+
+if nargin < 12
+    SSI_top_PCs_in = [];
 end
 
 %% Pad and Epoch Data
@@ -109,26 +117,43 @@ if isnan(noise_multiplier), noise_multiplier = 3; end
 % Pre-calculate RefCOV eigenvectors for SENSAI
 
 if strcmpi(signal_type, 'eeg')
-    refCOV_top_PCs=3;
+    if isempty(refCOV_top_PCs_in)
+        refCOV_top_PCs = 3;
+    else
+        refCOV_top_PCs = refCOV_top_PCs_in;
+    end
     disp(['EEG  refCOV PCs: ' num2str(refCOV_top_PCs)]);
-    SSI_top_PCs = 3;
+    
+    if isempty(SSI_top_PCs_in)
+        SSI_top_PCs = 3;
+    else
+        SSI_top_PCs = SSI_top_PCs_in;
+    end
     disp(['EEG  SSI PCs: ' num2str(SSI_top_PCs) newline]);
 
 elseif strcmpi(signal_type, 'meg')
-    % Adaptive: minimum PCs explaining >= 70% of refCOV variance
-    % Use refCOV_reg (regularized, always well-conditioned)
-    % refCOV_reg=refCOV;
-    all_evals_refCOV = eig(refCOV_reg);
-    all_evals_refCOV = sort(all_evals_refCOV, 'descend');
-    cumvar_refCOV = cumsum(all_evals_refCOV) / sum(all_evals_refCOV);
-    refCOV_top_PCs = find(cumvar_refCOV >= 0.85, 1, 'first');
-    refCOV_top_PCs = max(1, min(refCOV_top_PCs, N_EEG_electrodes - 1));
-    fprintf('MEG  RefCOV PCs: %d (%.0f%% var)\n', refCOV_top_PCs, 100 * cumvar_refCOV(refCOV_top_PCs));
-
+    if isempty(refCOV_top_PCs_in)
+        % Adaptive: minimum PCs explaining >= 70% of refCOV variance
+        % Use refCOV_reg (regularized, always well-conditioned)
+        % refCOV_reg=refCOV;
+        all_evals_refCOV = eig(refCOV_reg);
+        all_evals_refCOV = sort(all_evals_refCOV, 'descend');
+        cumvar_refCOV = cumsum(all_evals_refCOV) / sum(all_evals_refCOV);
+        refCOV_top_PCs = find(cumvar_refCOV >= 0.85, 1, 'first');
+        refCOV_top_PCs = max(1, min(refCOV_top_PCs, N_EEG_electrodes - 1));
+        fprintf('MEG  RefCOV PCs: %d (%.0f%% var)\n', refCOV_top_PCs, 100 * cumvar_refCOV(refCOV_top_PCs));
+    else
+        refCOV_top_PCs = refCOV_top_PCs_in;
+        fprintf('MEG  RefCOV PCs: %d (manual)\n', refCOV_top_PCs);
+    end
 
     % Top PCs for SENSAI (separate from refCOV top PCs)
-    refCOV_ratio=(refCOV_top_PCs/(noise_multiplier + 3))^1/2;
-    SSI_top_PCs = round(refCOV_ratio + 3);
+    if isempty(SSI_top_PCs_in)
+        refCOV_ratio=(refCOV_top_PCs/(noise_multiplier + 3))^1/2;
+        SSI_top_PCs = round(refCOV_ratio + 3);
+    else
+        SSI_top_PCs = SSI_top_PCs_in;
+    end
     disp(['MEG  SSI PCs: ' num2str(SSI_top_PCs) newline]);
 end
 

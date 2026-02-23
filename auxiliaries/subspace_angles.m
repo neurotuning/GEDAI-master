@@ -26,11 +26,10 @@ B = double(B);
 
 % Compute the SVD of A' * B. The singular values (S) are the cosines
 % of the principal angles.
-% We only need the singular values, so U and V are not captured.
-[~, S, ~] = svd(A' * B);
-
-% Extract the singular values, which are on the diagonal of S.
-cos_theta = diag(S);
+% We only need the singular values. Outputting 'svd' to a single variable
+% returns a column vector of the singular values, which avoids 'diag'
+% vector/matrix ambiguities when min(size) = 1.
+cos_theta = svd(A' * B);
 
 % Due to floating-point arithmetic, cos_theta might be slightly outside
 % the valid range of [-1, 1] for acos. Clip values to prevent complex outputs.
