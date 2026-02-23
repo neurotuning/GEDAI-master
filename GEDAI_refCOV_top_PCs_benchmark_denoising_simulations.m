@@ -346,7 +346,7 @@ for s_idx = 1:length(ssi_range)
         
         parfor m=1:length(file_mixing_combination)
             tic
-            ALLEEG11 = GEDAI(ALLEEG3(m), 'auto', 12, 0.5, 'precomputed', false, false, inf, 'eeg', current_refcov, current_ssi);
+            ALLEEG11 = GEDAI(ALLEEG3(m), 'auto', 12, 0.5, 'precomputed', true, false, inf, 'eeg', current_refcov, current_ssi);
             time_GEDAI(m,:) = toc;
             
             % denoised_dataset_name=['GEDAI ' ' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
@@ -369,7 +369,7 @@ end
 % Plot contour
 figure;
 [X, Y] = meshgrid(ssi_range, refcov_range);
-contourf(X, Y, mean_GEDAI_SNR_matrix, 20);
+contourf(X, Y, mean_GEDAI_SNR_matrix, 30);
 colorbar;
 xlabel('SSI top PCs');
 ylabel('refCOV top PCs');
