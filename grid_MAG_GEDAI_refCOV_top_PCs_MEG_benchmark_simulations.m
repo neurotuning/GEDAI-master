@@ -1,0 +1,470 @@
+% script for evaluating artifact removal across different SNR levels
+% N.B. can take between 12 - 48 hours when processing thousands of datasets
+
+%%  ALLEEG1: ground truth datasets
+%%  ALLEEG2: artifact-contaminated datasets
+%%  ALLEEG3: mixed (ground truth + artifact) datasets
+
+%%  ALLEEG6: raw denoised dataset
+%%  ALLEEG7: ASR denoised dataset
+
+%%  ALLEEG9: IClabel denoised dataset
+%%  ALLEEG10: MARA denoised dataset
+%%  ALLEEG11: GEDAI denoised dataset
+
+% Tomas Ros, CIBM & University of Geneva, 2025
+
+clear all
+eeglab nogui
+
+just_testing=false; % for script testing purposes (runs only a few files)
+random_number_of_test_files = 2; % Number of test files to run
+
+%% manually set the NOISE parameters below that will be investigated
+
+contaminated_signal_proportion= [100]; % percent of epochs temporally contaminated with artifact e.g. [25 50 75 100]
+signal_to_noise_in_db=[-9 ]; % initial data signal-to-noise ratio in decibels e.g. [-9 -6 -3 0]
+
+
+%% automated script begins here %%
+
+%% Read the GROUND TRUTH data
+Group1Dir = uigetdir([],'Root directory of CLEAN EEG files (EEGlab set files)');
+Group1Index = 1;
+DirGroup1 = dir(fullfile(Group1Dir,'*.set'));
+FileNamesGroup1 = {DirGroup1.name};
+files_in_Group1=numel(FileNamesGroup1);
+
+%% Determine magnetometer channel indices from the first file
+if files_in_Group1 > 0
+    tempEEG = pop_loadset('filename', FileNamesGroup1{1}, 'filepath', Group1Dir);
+    mag_chans = find(strcmp({tempEEG.chanlocs.type}, 'MEG MAG'));
+end
+
+%% Read the ARTIFACT data
+Group2Dir = uigetdir([],'Root directory of ARTIFACT files (EEGlab set files)');
+SavePath   = pwd;
+Group2Index = 2;
+DirGroup2 = dir(fullfile(Group2Dir,'**','*.set'));
+FileNamesGroup2 = {DirGroup2.name};
+files_in_Group2=numel(FileNamesGroup2);
+
+
+%% initialize tables
+varNames = {'clean_EEG_file', 'artifact_file','artifact','temporal_contamination','signal_to_noise','Algorithm','Rsquared'}; 
+TABLE_Rsquared_concatenated = table('Size', [0, numel(varNames)], ...
+          'VariableTypes', {'string','string', 'string','string','string', 'categorical', 'double'}, ...
+          'VariableNames', varNames);
+
+varNames = {'clean_EEG_file','artifact_file','artifact','temporal_contamination','signal_to_noise','Algorithm','RRMSE'}; 
+TABLE_RRMSE_concatenated= table('Size', [0, numel(varNames)], ...
+          'VariableTypes', {'string','string', 'string','string','string', 'categorical', 'double'}, ...
+          'VariableNames', varNames);
+
+varNames = {'clean_EEG_file','artifact_file','artifact','temporal_contamination','signal_to_noise','Algorithm','SNR'}; 
+TABLE_SNR_concatenated= table('Size', [0, numel(varNames)], ...
+          'VariableTypes', {'string','string', 'string','string','string', 'categorical', 'double'}, ...
+          'VariableNames', varNames);
+
+
+varNames = {'clean_EEG_file','artifact_file','artifact','temporal_contamination','signal_to_noise','Algorithm','time'}; 
+TABLE_time_concatenated= table('Size', [0, numel(varNames)], ...
+          'VariableTypes', {'string','string', 'string','string','string', 'categorical', 'double'}, ...
+          'VariableNames', varNames);
+
+
+
+h = waitbar(0,'Please wait...');
+for n = 1:length(signal_to_noise_in_db)  % LOOP 1: looping through different SNRs
+    waitbar((n-1)/length(signal_to_noise_in_db),h, ...
+        sprintf('SNR Loop: %d%% complete',round((n-1)/length(signal_to_noise_in_db)*100))); 
+    
+    for c = 1:length(contaminated_signal_proportion) % LOOP 2: looping through different TEMPORAL CONTAMINATION levels
+    waitbar(((n-1)+ (c-1)/length(contaminated_signal_proportion))/length(signal_to_noise_in_db) ,h, ...
+        sprintf('SNR %d/%d, Contam. %d/%d: Initializing...', n, length(signal_to_noise_in_db), c, length(contaminated_signal_proportion)));
+
+    signal_to_noise_linear = 10.^(signal_to_noise_in_db / 20); % signal/noise amplitude ratio  
+    noise = 1./signal_to_noise_linear; % noise/signal amplitude ratio  
+
+
+
+% bandpass_filter=[1 Inf] % uncomment here and below if additional band-pass filtering is needed
+
+
+% % Load the GROUND TRUTH data(group 1)
+for f = 1:files_in_Group1
+    ALLEEG1(f) = pop_loadset('filename', FileNamesGroup1{f}, 'filepath', Group1Dir);
+    ALLEEG1(f) = pop_select(ALLEEG1(f), 'channel', mag_chans);
+    % ALLEEG1(f) = pop_firws(ALLEEG1(f), 'fcutoff', bandpass_filter, 'ftype', 'bandpass', 'wtype', 'blackman', 'forder', 1408);
+   
+
+
+   ALLEEG1(f).data=reshape(zscore(ALLEEG1(f).data(:)), size(ALLEEG1(f).data) ); % SNR normalise amplitudes of CLEAN DATA
+
+end
+
+% % Load the ARTIFACT data (group 2)
+clear keptColumnIndices
+clear zeroedColumnIndices
+for f = 1:files_in_Group2
+   ALLEEG2(f) = pop_loadset('filename', FileNamesGroup2{f}, 'filepath', DirGroup2(f).folder);
+   ALLEEG2(f) = pop_select(ALLEEG2(f), 'channel', mag_chans);
+    % ALLEEG2(f) = pop_firws(ALLEEG2(f), 'fcutoff', bandpass_filter, 'ftype', 'bandpass', 'wtype', 'blackman', 'forder', 1408);
+
+seconds_per_epoch=1;
+total_epochs=ceil(ALLEEG2(f).xmax/seconds_per_epoch);
+proportion_of_epochs=total_epochs*contaminated_signal_proportion(c)/100;
+sample_length=ALLEEG2(f).srate*seconds_per_epoch;
+[ALLEEG2(f).data, keptColumnIndices(f,:), zeroedColumnIndices(f,:)] = retainExactPercentageRandomEEGBlocks(ALLEEG2(f).data, contaminated_signal_proportion(c), sample_length/4, 2*sample_length);
+temp_data=ALLEEG2(f).data(:,keptColumnIndices(f,:)); 
+ALLEEG2(f).data(:,keptColumnIndices(f,:)) = noise(n)*reshape(zscore(temp_data(:)), size(temp_data) ); % SNR normalise amplitudes of ARTIFACT DATA
+
+end
+
+
+
+
+
+
+
+
+
+
+% % MIX: the GROUND TRUTH and ARTIFACT files
+file_mixing_combination=table2array(combinations([1:files_in_Group1],[1:files_in_Group2]));
+
+if just_testing
+
+file_mixing_combination = [randi(files_in_Group1, random_number_of_test_files, 1), ...
+                           randi(files_in_Group2, random_number_of_test_files, 1)];          
+end
+
+
+
+
+
+
+
+
+
+for m=1:length(file_mixing_combination) % LOOP 3: looping through different ARTIFACT TYPES
+
+    ALLEEG3(m)=ALLEEG1(1); % initialize ALLEEG3 dataset
+    mixed_dataset_name=[' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
+    ALLEEG3(m) = pop_editset(ALLEEG3(m), 'setname', mixed_dataset_name);
+    ALLEEG3(m).data=ALLEEG1(file_mixing_combination(m,1)).data + ALLEEG2(file_mixing_combination(m,2)).data;
+    
+    % ALLEEG2(m) = pop_saveset( ALLEEG2(m), 'filename',FileNamesGroup2{file_mixing_combination(m,2)},'savemode','onefile'); % optional artifact file save
+    % ALLEEG3(m) = pop_saveset( ALLEEG3(m),'filename',mixed_dataset_name, 'savemode','onefile'); % optional MIXED file save
+end
+
+
+%% RUN different denoising methods
+
+% % % RUN RAW (i.e. no denoising)
+% for m=1:length(file_mixing_combination)
+% 
+% tic
+% ALLEEG6= ALLEEG3(m);
+% time_raw(m,:) = toc;
+% 
+% denoised_dataset_name=['raw ' ' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
+% % ALLEEG6 = pop_saveset( ALLEEG6,'filename',denoised_dataset_name, 'savemode','onefile'); % optional DENOISED file save
+% 
+% % % estimate raw denoising quality
+% ground_truth_matrix=ALLEEG1(file_mixing_combination(m,1)).data;
+% raw_denoised_matrix=ALLEEG6.data;
+% 
+% raw_Rsquared(m,:)=variance_explained(ground_truth_matrix,raw_denoised_matrix);
+% raw_RRMSE(m,:)=relative_RMSE(ground_truth_matrix, raw_denoised_matrix);
+% raw_SNR(m,:) = sig_to_noise(ground_truth_matrix,raw_denoised_matrix);
+% 
+% % vis_artifacts(ALLEEG7,ALLEEG1(file_mixing_combination(m,1)))
+% end
+% 
+% 
+% % % RUN ASR 
+% 
+% for m=1:length(file_mixing_combination)
+% 
+% tic
+% [~, artifact_type, ~] = fileparts(DirGroup2(file_mixing_combination(m,2)).folder)
+% if strcmp(artifact_type, 'NOISE') | strcmp(artifact_type, 'NOISE EOG EMG')% additionally use channel rejection for NOISE artifacts
+% 
+% ASRtemp = pop_clean_rawdata(ALLEEG3(m), 'FlatlineCriterion',5,'ChannelCriterion',0.8,'LineNoiseCriterion',4,'Highpass','off','BurstCriterion',20,'WindowCriterion','off','BurstRejection','off','Distance','Euclidian');
+% ALLEEG7  = pop_interp(ASRtemp,  ALLEEG1(1).chanlocs, 'spherical');
+% time_ASR(m,:) = toc;
+% 
+% 
+% else % no bad channel rejection
+% 
+% ALLEEG7 = pop_clean_rawdata(ALLEEG3(m), 'FlatlineCriterion','off','ChannelCriterion','off','LineNoiseCriterion','off','Highpass','off','BurstCriterion',20,'WindowCriterion','off','BurstRejection','off','Distance','Euclidian');
+% time_ASR(m,:) = toc;
+% 
+% end
+% 
+% 
+% 
+% denoised_dataset_name=['ASR ' ' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
+% % ALLEEG7 = pop_saveset( ALLEEG7,'filename',denoised_dataset_name, 'savemode','onefile'); % optional DENOISED file save
+% 
+% % % estimate ASR denoising quality
+% ground_truth_matrix=ALLEEG1(file_mixing_combination(m,1)).data;
+% ASR_denoised_matrix=ALLEEG7.data;
+% 
+% ASR_Rsquared(m,:)=variance_explained(ground_truth_matrix,ASR_denoised_matrix);
+% ASR_RRMSE(m,:)=relative_RMSE(ground_truth_matrix, ASR_denoised_matrix);
+% ASR_SNR(m,:) = sig_to_noise(ground_truth_matrix,ASR_denoised_matrix);f
+% 
+% % vis_artifacts(ALLEEG7,ALLEEG1(file_mixing_combination(m,1)))
+% end
+% 
+% 
+% 
+% 
+% % RUN ICA (for IClabel and MARA)
+% 
+% for m=1:length(file_mixing_combination)
+% [~, artifact_type, ~] = fileparts(DirGroup2(file_mixing_combination(m,2)).folder)
+% 
+% if strcmp(artifact_type, 'NOISE') | strcmp(artifact_type, 'NOISE EOG EMG') % additionally use bad channel rejection for NOISE condition prior to ICA
+% 
+% ALLEEG8(m) = pop_clean_rawdata(ALLEEG3(m), 'FlatlineCriterion',5,'ChannelCriterion',0.8,'LineNoiseCriterion',4,'Highpass','off','BurstCriterion','off','WindowCriterion','off','BurstRejection','off','Distance','Euclidian');
+% 
+% 
+% else % no bad channel rejection
+% 
+% ALLEEG8(m)=ALLEEG3(m);
+% end
+% 
+% tic
+% % run Infomax ICA Extended
+% ALLEEG8(m) = pop_runica(ALLEEG8(m), 'verbose', 'off','extended',1,'interupt','off'); % run Infomax ICA Extended
+% 
+% time_ICA(m,:) = toc;
+% end
+% 
+% 
+% 
+% 
+% % RUN IClabel
+% for m=1:length(file_mixing_combination)
+% 
+% ALLEEG9=ALLEEG8(m);
+% 
+% tic
+% ALLEEG9 = pop_iclabel(ALLEEG9, 'default'); % run IClabel
+% [maxprob, IC_class]=max(ALLEEG9.etc.ic_classification.ICLabel.classifications');
+% 
+% [~, artifact_type, ~] = fileparts(DirGroup2(file_mixing_combination(m,2)).folder);
+% 
+% if strcmp(artifact_type, 'NOISE') | strcmp(artifact_type, 'NOISE EOG EMG') % remove all components except for "brain" or "other"
+% 
+% keep_ICbrain=find(IC_class==1); % brain ICs
+% keep_ICother=find(IC_class==7); % other ICs
+% try
+% ALLEEG9 = pop_subcomp( ALLEEG9, [keep_ICbrain keep_ICother], 0, 1); %keep brain + other ICs
+% catch 
+% end
+% 
+% 
+% else % remove only eye or muscle artifacts
+% %% EYE and/or MUSCLE ARTIFACTS
+% 
+% remove_ICeye=find(IC_class==3);
+% remove_ICmuscle=find(IC_class==2);
+% 
+% ALLEEG9 = pop_subcomp( ALLEEG9, [remove_ICeye remove_ICmuscle], 0, 0); %remove eye + muscle ICs
+% 
+% end
+%  %% interpolate bad channels, if any
+% ALLEEG9 = pop_interp(ALLEEG9,  ALLEEG1(1).chanlocs, 'spherical'); 
+% 
+% time_IClabel(m,:) = toc+ time_ICA(m,:);
+% 
+% denoised_dataset_name=['IClabel ' ' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
+% % ALLEEG9 = pop_saveset( ALLEEG9,'filename',denoised_dataset_name, 'savemode','onefile'); % optional DENOISED file save
+% 
+% % % estimate IClabel denoising quality
+% ground_truth_matrix=ALLEEG1(file_mixing_combination(m,1)).data;
+% IClabel_denoised_matrix=ALLEEG9.data;
+% 
+% IClabel_Rsquared(m,:)=variance_explained(ground_truth_matrix,IClabel_denoised_matrix);
+% IClabel_RRMSE(m,:)=relative_RMSE(ground_truth_matrix, IClabel_denoised_matrix);
+% IClabel_SNR(m,:) = sig_to_noise(ground_truth_matrix,IClabel_denoised_matrix);
+% end
+% 
+% 
+% % % RUN MARA
+% for m=1:length(file_mixing_combination)
+% 
+% 
+% ALLEEG10=ALLEEG8(m);
+% 
+% tic
+% 
+% [artifact_ICs, info] = MARA(ALLEEG10); % run MARA
+% 
+%  %% reject the ICs that MARA flagged as artifact
+% ALLEEG10 = pop_subcomp( ALLEEG10, artifact_ICs, 0); %remove flagged components
+% 
+%  %% interpolate bad channels, if any
+% ALLEEG10   = pop_interp(ALLEEG10,  ALLEEG1(1).chanlocs, 'spherical'); 
+% 
+% time_MARA(m,:) = toc + time_ICA(m,:);
+% 
+% 
+% denoised_dataset_name=['MARA ' ' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
+% % ALLEEG10 = pop_saveset( ALLEEG10,'filename',denoised_dataset_name, 'savemode','onefile'); % optional DENOISED file save
+% 
+% % % estimate MARA denoising quality
+% ground_truth_matrix=ALLEEG1(file_mixing_combination(m,1)).data;
+% MARA_denoised_matrix=ALLEEG10.data;
+% 
+% MARA_Rsquared(m,:)=variance_explained(ground_truth_matrix,MARA_denoised_matrix);
+% MARA_RRMSE(m,:)=relative_RMSE(ground_truth_matrix, MARA_denoised_matrix);
+% MARA_SNR(m,:) = sig_to_noise(ground_truth_matrix,MARA_denoised_matrix);
+% end
+
+
+ % RUN GEDAI
+
+load('Freesurfer_MEG306_leadfield_4_GEDAI.mat');
+MEG_gram_matrix=MEG_leadfield_4_GEDAI.Gain*MEG_leadfield_4_GEDAI.Gain';
+MEG_gram_matrix = MEG_gram_matrix(mag_chans, mag_chans);
+
+ssi_range = 1:10;
+refcov_range = 1:20;
+mean_GEDAI_SNR_matrix = zeros(length(refcov_range), length(ssi_range));
+
+for s_idx = 1:length(ssi_range)
+    for r_idx = 1:length(refcov_range)
+ 
+
+        current_refcov = refcov_range(r_idx);
+        current_ssi = ssi_range(s_idx);
+        fprintf('Evaluating refCOV_top_PCs=%d, SSI_top_PCs=%d\n', current_refcov, current_ssi);
+        
+        % if current_refcov < current_ssi
+        %     fprintf('Skipping because refCOV_top_PCs must be => SSI_top_PCs\n');
+        %     mean_GEDAI_SNR_matrix(r_idx, s_idx) = NaN;
+        %     continue;
+        % end
+        
+        GEDAI_Rsquared = zeros(length(file_mixing_combination), 1);
+        GEDAI_RRMSE = zeros(length(file_mixing_combination), 1);
+        GEDAI_SNR = zeros(length(file_mixing_combination), 1);
+        time_GEDAI = zeros(length(file_mixing_combination), 1);
+        
+        parfor m=1:length(file_mixing_combination)
+            tic
+            ALLEEG11 = GEDAI(ALLEEG3(m), 'auto', 12, 0.5, MEG_gram_matrix, true, false, inf, 'meg', current_refcov, current_ssi);
+            time_GEDAI(m,:) = toc;
+            
+            % denoised_dataset_name=['GEDAI ' ' SNR=' num2str(signal_to_noise_linear(n)) ' contamination=' num2str(contaminated_signal_proportion(c)) ' ' FileNamesGroup1{file_mixing_combination(m,1)} ' + ' FileNamesGroup2{file_mixing_combination(m,2)}]
+            % ALLEEG11 = pop_saveset( ALLEEG11,'filename',denoised_dataset_name, 'savemode','onefile'); % optional DENOISED file save
+
+            % estimate GEDAI denoising quality
+            ground_truth_matrix=ALLEEG1(file_mixing_combination(m,1)).data;
+            GEDAI_denoised_matrix=ALLEEG11.data;
+
+            GEDAI_Rsquared(m,:)=variance_explained(ground_truth_matrix,GEDAI_denoised_matrix);
+            GEDAI_RRMSE(m,:)=relative_RMSE(ground_truth_matrix, GEDAI_denoised_matrix);
+            GEDAI_SNR(m,:) = sig_to_noise(ground_truth_matrix,GEDAI_denoised_matrix);
+
+            % vis_artifacts(ALLEEG11,ALLEEG1(file_mixing_combination(m,1)))
+        end
+        mean_GEDAI_SNR_matrix(r_idx, s_idx) = mean(GEDAI_SNR);
+        mean_GEDAI_Rsquared_matrix(r_idx, s_idx) = mean(GEDAI_Rsquared);
+        mean_GEDAI_RRMSE_matrix(r_idx, s_idx) = mean(GEDAI_RRMSE);
+    end
+end
+
+% Plot contour
+figure;
+[X, Y] = meshgrid(ssi_range, refcov_range);
+contourf(X, Y, mean_GEDAI_SNR_matrix, 30);
+colorbar;
+xlabel('SSI top PCs');
+ylabel('refCOV top PCs');
+title(sprintf('Mean GEDAI SNR (Contamination=%d%%, SNR=%d dB)', contaminated_signal_proportion(c), signal_to_noise_in_db(n)));
+
+
+%%%%%%%   SUMMARY RESULTS  %%%%%%
+
+% define clean EEG files
+for m=1:length(file_mixing_combination)
+clean_EEG_file_name=DirGroup1(file_mixing_combination(m,1)).name;
+clean_EEG_file{m,:}=clean_EEG_file_name;
+end
+
+% define artifact files
+for m=1:length(file_mixing_combination)
+artifact_file_name=DirGroup2(file_mixing_combination(m,2)).name;
+artifact_file{m,:}=artifact_file_name;
+end
+
+% define temporal contamination variable
+contamination=repmat(num2str(contaminated_signal_proportion(c)), size(GEDAI_Rsquared));
+
+% define signal_to_noise variable
+signal_to_noise=repmat(num2str(signal_to_noise_in_db(n)), size(GEDAI_Rsquared));
+
+% define artifact variable
+for m=1:length(file_mixing_combination)
+[~, artifact_name, ~] = fileparts(DirGroup2(file_mixing_combination(m,2)).folder);
+artifact{m,:}=artifact_name;
+end
+
+% %  Variance Explained table (higher is better)
+TABLE_Rsquared=table(clean_EEG_file,artifact_file,artifact,contamination,signal_to_noise, GEDAI_Rsquared,'VariableNames',["clean_EEG_file","artifact_file","artifact","temporal_contamination","signal_to_noise", "GEDAI"]);
+TABLE_Rsquared = stack(TABLE_Rsquared,6,'NewDataVariableName','Rsquared','IndexVariableName','Algorithm');
+TABLE_Rsquared_concatenated= [TABLE_Rsquared_concatenated; TABLE_Rsquared];
+TABLE_Correlation_concatenated=TABLE_Rsquared_concatenated;
+TABLE_Correlation_concatenated.Correlation=TABLE_Rsquared_concatenated.Rsquared.^0.5;
+
+% %  Signal to Noise ratio (higher is better)
+TABLE_SNR=table(clean_EEG_file,artifact_file,artifact,contamination,signal_to_noise, GEDAI_SNR,'VariableNames',["clean_EEG_file","artifact_file","artifact","temporal_contamination","signal_to_noise","GEDAI"]);
+TABLE_SNR = stack(TABLE_SNR,6,'NewDataVariableName','SNR', 'IndexVariableName','Algorithm');
+TABLE_SNR_concatenated= [TABLE_SNR_concatenated; TABLE_SNR];
+
+% % % RRMSE table (lower is better)
+TABLE_RRMSE=table(clean_EEG_file,artifact_file,artifact,contamination,signal_to_noise,GEDAI_RRMSE,'VariableNames',["clean_EEG_file","artifact_file","artifact","temporal_contamination","signal_to_noise","GEDAI"]);
+TABLE_RRMSE = stack(TABLE_RRMSE,6,'NewDataVariableName','RRMSE', 'IndexVariableName','Algorithm');
+TABLE_RRMSE_concatenated= [TABLE_RRMSE_concatenated; TABLE_RRMSE];
+
+% % % Computation Time table (lower is better)
+TABLE_time=table(clean_EEG_file,artifact_file,artifact,contamination,signal_to_noise,time_GEDAI,'VariableNames',["clean_EEG_file","artifact_file","artifact","temporal_contamination","signal_to_noise","GEDAI"]);
+TABLE_time = stack(TABLE_time,6,'NewDataVariableName','time', 'IndexVariableName','Algorithm');
+TABLE_time_concatenated= [TABLE_time_concatenated; TABLE_time];
+
+    end
+
+end
+
+
+%% denoising quality functions
+
+function SNR = sig_to_noise (ground_truth_matrix, denoised_matrix)
+original_signal_power =var(ground_truth_matrix (:)); % mean power of the ground truth (brain) signal over electrodes
+residual_noise_power = var(denoised_matrix(:)-ground_truth_matrix(:));  % mean power of the residual noise after processing (denoised - ground truth)
+SNR = 10 * log10(original_signal_power/residual_noise_power);
+end
+
+
+function Rsquared=variance_explained(ground_truth_matrix,denoised_matrix)
+R=corrcoef(ground_truth_matrix, denoised_matrix);
+Rsquared=R(2)*R(2);
+end
+
+
+function RRMSE = relative_RMSE(ground_truth_matrix, denoised_matrix)
+    squared_error = (ground_truth_matrix - denoised_matrix).^2;    % Calculate the squared error between all elements
+    RMSE = sqrt(mean(squared_error(:)));   % Calculate the Root Mean Square Error (RMSE) across all elements
+    rms_ground_truth = rms(ground_truth_matrix(:)); % Calculate the Root Mean Square (RMS) of all elements in the ground truth matrix
+    RRMSE = RMSE / rms_ground_truth;  % Calculate the Relative Root-Mean-Square Error
+end
+
+
+
+
