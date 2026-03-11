@@ -32,7 +32,7 @@ p.parse(varargin{:}); % Parse the input arguments
 % Create GUI for parameter input (rest of the code remains the same)
 uilist = { ...    
     {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' '                    auto|                    auto+|                    auto-'} ...
-    {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' '          precomputed|          interpolated'} ...
+    {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' '          precomputed|          interpolated|          empirical'} ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency'} ...
     {} ...
@@ -41,9 +41,8 @@ uilist = { ...
     {} ...
     {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1}, ...
     {'style' 'text' 'string' 'Artifact visualization (from ASR):'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1}, ...
-    {'style' 'text' 'string' 'SENSAI visualization:'} {'style' 'checkbox' 'string' '' 'tag' 'visualize_manifold' 'Value' 1}, ...
 };
-geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1, 1] };
+geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] };
 title = '  GEDAI denoising |  v1.5  ';
 
 % Get user input
@@ -53,7 +52,7 @@ if isempty(out), return; end
 threshold_cell = {'auto', 'auto+', 'auto-'};
 artifact_threshold = threshold_cell{userInput{1}};
 
-ref_matrix_cell = {'precomputed', 'interpolated'};
+ref_matrix_cell = {'precomputed', 'interpolated', 'empirical'};
 ref_matrix_type = ref_matrix_cell{userInput{2}};
 epoch_size_in_cycles = str2double(out.epoch_size_in_cycles);
 lowcut_frequency = str2double(out.lowcut_frequency);
@@ -66,9 +65,12 @@ end
 
 use_parallel = logical(out.parallel_processing);
 visualize_artifacts = logical(out.visualization_A);
-visualize_manifold = logical(out.visualize_manifold);
 
-[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold, [], visualize_manifold);
+if strcmp(ref_matrix_type, 'empirical')
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI_empirical(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,'precomputed',use_parallel,visualize_artifacts, ENOVA_threshold, 'eeg');
+else
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold, [], visualize_artifacts);
+end
   
 EEG = eegh(com, EEG); % update EEG.history
     
