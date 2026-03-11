@@ -16,7 +16,7 @@ function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_
 %   epoch_size_in_cycles        - Wave cycles per wavelet band. Default is 12.
 %   lowcut_frequency            - exclude bands below this frequency (Hz). Default is 0.5 Hz.
 %   ref_matrix_type             - Matrix used for the initial "empirical" selection. 
-%                                 Default is "precomputed".
+%                                 Default is "auto".
 %   parallel                    - Boolean for parallel processing. Default is true.
 %   visualize_artifacts         - Boolean for artifact visualization. Default is false.
 %   ENOVA_threshold             - Threshold for rejecting epochs. Default is inf.
