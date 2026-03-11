@@ -548,13 +548,16 @@ end
 % MEMORY OPTIMIZED: Clear unfiltered data after all wavelet processing
 clear unfiltered_data;
 
-%% Finalization: Reconstruct EEG and calculate final scores
+% Ensure final data is on CPU and real-valued for visualization/output
+wavelet_band_filtered_data = gather(real(double(wavelet_band_filtered_data)));
+
+% Finalization: Reconstruct EEG and calculate final scores
 % MEMORY OPTIMIZED: Data already accumulated in 2D array, no summation needed
 EEGclean = EEGavRef;
 EEGclean.data = wavelet_band_filtered_data;  % Already accumulated
 % Create artifact structure
 EEGartifacts = EEGclean;
-EEGartifacts.data = EEGavRef.data(:, 1:size(EEGclean.data, 2)) - EEGclean.data;
+EEGartifacts.data = gather(real(double(EEGavRef.data(:, 1:size(EEGclean.data, 2))))) - EEGclean.data;
 
 % Calculate composite SENSAI score for epoch rejection
 noise_multiplier = 1;
