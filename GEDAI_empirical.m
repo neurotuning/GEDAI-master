@@ -231,7 +231,7 @@ else
 end
 
 % Visualization
-if visualize_artifacts
+if visualize_artifacts && ~ischar(empiricalLogMeanCOV)
     figure('Name', 'GEDAI Empirical Selection');
     scatter(SSI, mean_GFP, 30, empirical_score, 'filled', 'MarkerFaceAlpha', 0.4); hold on;
     if ~isempty(high_fid_idx)
@@ -240,6 +240,12 @@ if visualize_artifacts
     else
         legend('All Epochs (Color=Score)');
     end
+    xlabel('Subspace Similarity Index (SSI)');
+    ylabel('Global Field Power (GFP)');
+    title('GEDAI High-Fidelity Epoch Selection');
+    grid on;
+    c = colorbar;
+    ylabel(c, 'Selection Score');
 end
 
 %% --- PHASE 2: Standard GEDAI Pipeline ---
