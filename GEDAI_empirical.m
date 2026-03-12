@@ -51,17 +51,30 @@ end
 p = fileparts(which('GEDAI'));
 addpath(fullfile(p, 'auxiliaries'));
 
-%% --- PHASE 0: Sanity-Check if High-Quality Epochs Exist ---
-disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
-% Run standard GEDAI with precomputed leadfield as baseline
-[~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'precomputed', parallel, false, inf, signal_type, false);
-
-hq_mask = ENOVA0 <= min_ENOVA_per_epoch;
-n_hq = sum(hq_mask);
-fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
-
-if n_hq < 3
-    warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
+if strcmp(ref_matrix_type, 'auto')
+    %% --- PHASE 0: Sanity-Check if High-Quality Epochs Exist ---
+    disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
+    % Run standard GEDAI with precomputed leadfield as baseline
+    try
+        [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'precomputed', parallel, false, inf, signal_type, false);
+    catch err
+        if contains(err.message, 'Electrode labels not found')
+            disp('GEDAI_empirical: PHASE 0 fallback - Retrying with "interpolated" leadfield...');
+            [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'interpolated', parallel, false, inf, signal_type, false);
+        else
+            rethrow(err);
+        end
+    end
+    
+    hq_mask = ENOVA0 <= min_ENOVA_per_epoch;
+    n_hq = sum(hq_mask);
+    fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
+    
+    if n_hq < 3
+        warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
+    end
+else
+    hq_mask = []; % Skip Phase 0
 end
 
 %% --- PHASE 1: Empirical High-Quality Epoch Selection ---
@@ -104,26 +117,40 @@ EEGemp.data = squeeze(sum(mra_hp, 1))';
 clear mra_hp;
 
 % 2. Get Empirical Anchor Subspace
-if ischar(ref_matrix_type_internal) && strcmp(ref_matrix_type_internal, 'precomputed')
+if ischar(ref_matrix_type_internal) && ismember(ref_matrix_type_internal, {'precomputed', 'interpolated'})
     L = load('fsavLEADFIELD_4_GEDAI.mat');
-    template_labels = {L.leadfield4GEDAI.electrodes.Name};
-    chanidx = zeros(1, length(EEGin.chanlocs));
-    for i = 1:length(EEGin.chanlocs)
-        lbl = lower(EEGin.chanlocs(i).labels);
-        [found, idx] = ismember(lbl, lower(template_labels));
-        if found
-            chanidx(i) = idx;
-        else
-            for j = 1:length(template_labels)
-                if contains(lbl, lower(template_labels{j}))
-                    chanidx(i) = j;
-                    break;
+    
+    if strcmp(ref_matrix_type_internal, 'precomputed')
+        template_labels = {L.leadfield4GEDAI.electrodes.Name};
+        chanidx = zeros(1, length(EEGin.chanlocs));
+        for i = 1:length(EEGin.chanlocs)
+            lbl = lower(EEGin.chanlocs(i).labels);
+            [found, idx] = ismember(lbl, lower(template_labels));
+            if found
+                chanidx(i) = idx;
+            else
+                for j = 1:length(template_labels)
+                    if contains(lbl, lower(template_labels{j}))
+                        chanidx(i) = j;
+                        break;
+                    end
                 end
             end
         end
+        if any(chanidx == 0)
+            warning('GEDAI_empirical: Electrode labels not found. Falling back to "interpolated" matrix for empirical phase.');
+            ref_matrix_type_internal = 'interpolated';
+        end
     end
-    if any(chanidx == 0), error('GEDAI_empirical: Electrode labels not matched for empirical phase.'); end
-    refCOV_emp = L.leadfield4GEDAI.gram_matrix_avref(chanidx,chanidx);
+
+    if strcmp(ref_matrix_type_internal, 'precomputed')
+        refCOV_emp = L.leadfield4GEDAI.gram_matrix_avref(chanidx,chanidx);
+    else % interpolated
+        leadfield_EEG = L.leadfield4GEDAI.EEG;
+        leadfield_EEG.data = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1); 
+        interpolated_EEG = interp_mont_GEDAI(leadfield_EEG, EEGemp.chanlocs);
+        refCOV_emp = interpolated_EEG.data * interpolated_EEG.data';
+    end
 else
     % If ref_matrix_type is already a matrix
     refCOV_emp = ref_matrix_type_internal;
@@ -149,7 +176,10 @@ mean_GFP = -inf(1, n_epochs);
 epoch_covs = cell(1, n_epochs);
 
 % Resample Phase 0 mask to match Phase 1 resolution if needed
-if length(hq_mask) ~= n_epochs
+if isempty(hq_mask)
+    % If Phase 0 was skipped, consider all epochs potentially high-quality
+    hq_mask_resampled = true(1, n_epochs);
+elseif length(hq_mask) ~= n_epochs
     fprintf('GEDAI_empirical: Resampling Phase 0 mask (%d) to match Phase 1 epochs (%d)...\n', length(hq_mask), n_epochs);
     xq = linspace(1, length(hq_mask), n_epochs);
     hq_mask_resampled = interp1(1:length(hq_mask), double(hq_mask), xq, 'nearest') > 0.5;
