@@ -36,12 +36,9 @@ if nargin < 8 || isempty(ENOVA_threshold), ENOVA_threshold = inf; end
 if nargin < 9 || isempty(signal_type), signal_type = 'eeg'; end
 
 % Handle internal min_ENOVA_per_epoch and ref_matrix_type mapping
+% Handle internal min_ENOVA_per_epoch and ref_matrix_type mapping
 if ischar(ref_matrix_type) && ismember(ref_matrix_type, {'auto', 'empirical'})
-    if strcmp(ref_matrix_type, 'auto')
-        min_ENOVA_per_epoch = 0.1;
-    else
-        min_ENOVA_per_epoch = inf;
-    end
+    min_ENOVA_per_epoch = 0.1; % Use consistent threshold for identification
     ref_matrix_type_internal = 'precomputed';
 else
     min_ENOVA_per_epoch = inf;
@@ -51,30 +48,26 @@ end
 p = fileparts(which('GEDAI'));
 addpath(fullfile(p, 'auxiliaries'));
 
-if strcmp(ref_matrix_type, 'auto')
-    %% --- PHASE 0: Sanity-Check if High-Quality Epochs Exist ---
-    disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
-    % Run standard GEDAI with precomputed leadfield as baseline
-    try
-        [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'precomputed', parallel, false, inf, signal_type, false);
-    catch err
-        if contains(err.message, 'Electrode labels not found')
-            disp('GEDAI_empirical: PHASE 0 fallback - Retrying with "interpolated" leadfield...');
-            [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'interpolated', parallel, false, inf, signal_type, false);
-        else
-            rethrow(err);
-        end
+%% --- PHASE 0: Sanity-Check if High-Quality Epochs Exist ---
+disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
+% Run standard GEDAI with precomputed leadfield as baseline
+try
+    [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'precomputed', parallel, false, inf, signal_type, false);
+catch err
+    if contains(err.message, 'Electrode labels not found')
+        disp('GEDAI_empirical: PHASE 0 fallback - Retrying with "interpolated" leadfield...');
+        [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'interpolated', parallel, false, inf, signal_type, false);
+    else
+        rethrow(err);
     end
-    
-    hq_mask = ENOVA0 <= min_ENOVA_per_epoch;
-    n_hq = sum(hq_mask);
-    fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
-    
-    if n_hq < 3
-        warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
-    end
-else
-    hq_mask = []; % Skip Phase 0
+end
+
+hq_mask = ENOVA0 <= min_ENOVA_per_epoch;
+n_hq = sum(hq_mask);
+fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
+
+if n_hq < 3
+    warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
 end
 
 %% --- PHASE 1: Empirical High-Quality Epoch Selection ---
@@ -176,10 +169,7 @@ mean_GFP = -inf(1, n_epochs);
 epoch_covs = cell(1, n_epochs);
 
 % Resample Phase 0 mask to match Phase 1 resolution if needed
-if isempty(hq_mask)
-    % If Phase 0 was skipped, consider all epochs potentially high-quality
-    hq_mask_resampled = true(1, n_epochs);
-elseif length(hq_mask) ~= n_epochs
+if length(hq_mask) ~= n_epochs
     fprintf('GEDAI_empirical: Resampling Phase 0 mask (%d) to match Phase 1 epochs (%d)...\n', length(hq_mask), n_epochs);
     xq = linspace(1, length(hq_mask), n_epochs);
     hq_mask_resampled = interp1(1:length(hq_mask), double(hq_mask), xq, 'nearest') > 0.5;
@@ -245,8 +235,8 @@ high_fid_idx = sort_idx(1:n_top);
 fprintf('GEDAI_empirical: Identified %d high-fidelity epochs out of %d available high-quality epochs (from %d total) using weighted scoring.\n', n_top, n_hq_final, n_epochs);
 
 if isempty(high_fid_idx)
-    warning('GEDAI_empirical: No high-quality epochs found (ENOVA and SSI criteria). Falling back to standard precomputed leadfield.');
-    empiricalLogMeanCOV = 'precomputed';
+    warning('GEDAI_empirical: No high-quality epochs found (ENOVA and SSI criteria). Falling back to standard %s matrix.', ref_matrix_type_internal);
+    empiricalLogMeanCOV = ref_matrix_type_internal;
 else
     % Calculate Log-Euclidean Mean covariance
     disp('GEDAI_empirical: Calculating Log-Euclidean Mean of high-quality covariances...');
