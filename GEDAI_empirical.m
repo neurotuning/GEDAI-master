@@ -1,4 +1,4 @@
-function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = GEDAI_empirical(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = GEDAI_empirical(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_sensai)
 % GEDAI_empirical - First identifies high-fidelity EEG epochs based on SSI & GFP metrics, 
 %                   then uses their Log-Euclidean Mean covariance as a custom reference 
 %                   matrix to run the standard GEDAI denoising pipeline.
@@ -21,6 +21,7 @@ function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_
 %   visualize_artifacts         - Boolean for artifact visualization. Default is false.
 %   ENOVA_threshold             - Threshold for rejecting epochs. Default is inf.
 %   signal_type                 - 'eeg' or 'meg'. Default is 'eeg'.
+%   visualize_sensai            - Boolean for SENSAI visualization. Default is false.
 %
 % Outputs:
 %   (All outputs match the standard GEDAI.m function)
@@ -34,6 +35,7 @@ if nargin < 6 || isempty(parallel), parallel = true; end
 if nargin < 7 || isempty(visualize_artifacts), visualize_artifacts = false; end
 if nargin < 8 || isempty(ENOVA_threshold), ENOVA_threshold = inf; end
 if nargin < 9 || isempty(signal_type), signal_type = 'eeg'; end
+if nargin < 10 || isempty(visualize_sensai), visualize_sensai = false; end
 
 % Handle internal min_ENOVA_per_epoch and ref_matrix_type mapping
 % Handle internal min_ENOVA_per_epoch and ref_matrix_type mapping
@@ -50,11 +52,18 @@ addpath(fullfile(p, 'auxiliaries'));
 
 %% --- PHASE 0: Sanity-Check if High-Quality Epochs Exist ---
 disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
-% Run standard GEDAI with precomputed leadfield as baseline
+% Determine anchor for sanity check
+if ~ischar(ref_matrix_type)
+    anchor0 = ref_matrix_type; % User provided matrix (e.g. Brainstorm MEG leadfield)
+else
+    anchor0 = 'precomputed'; % Default EEG template
+end
+
 try
-    [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'precomputed', parallel, false, inf, signal_type, false);
+    [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, anchor0, parallel, false, inf, signal_type, false);
 catch err
-    if contains(err.message, 'Electrode labels not found')
+    % Fallback only makes sense for EEG templates
+    if ischar(anchor0) && strcmpi(signal_type, 'eeg') && contains(err.message, 'Electrode labels not found')
         disp('GEDAI_empirical: PHASE 0 fallback - Retrying with "interpolated" leadfield...');
         [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'interpolated', parallel, false, inf, signal_type, false);
     else
@@ -213,15 +222,16 @@ if ~isempty(hq_idx_list)
     n_pool_actual = min(length(hq_idx_list), n_pool_target);
     pool_idx = hq_idx_list(sort_ssi_idx(1:n_pool_actual));
     
-    % Stage 2: Identify Top-Right Quadrant within the SSI pool
-    % Calculate medians within the pool
+    % Stage 2: Identify High-Quality candidates within the SSI pool
+    % Calculate threshold within the pool
     pool_SSI = SSI(pool_idx);
     pool_GFP = mean_GFP(pool_idx);
     median_SSI_pool = median(pool_SSI);
-    median_GFP_pool = median(pool_GFP);
+    % Stricter GFP threshold: 75th percentile instead of median
+    threshold_GFP_pool = prctile(pool_GFP, 75);
     
-    % Final selection: Quadrant logic
-    high_fid_idx = pool_idx(pool_SSI >= median_SSI_pool & pool_GFP >= median_GFP_pool);
+    % Final selection: Quadrant logic (SSI >= median, GFP >= 75th percentile)
+    high_fid_idx = pool_idx(pool_SSI >= median_SSI_pool & pool_GFP >= threshold_GFP_pool);
     
     n_top = length(high_fid_idx);
     
@@ -256,13 +266,13 @@ if visualize_artifacts && ~ischar(empiricalLogMeanCOV)
     figure('Name', 'GEDAI Empirical Selection');
     scatter(SSI, mean_GFP, 30, empirical_score, 'filled', 'MarkerFaceAlpha', 0.4); hold on;
     if ~isempty(high_fid_idx)
-        % Draw quadrant lines (relative to pool medians)
+        % Draw threshold lines (relative to pool metrics)
         xl = xlim; yl = ylim;
         line([median_SSI_pool median_SSI_pool], yl, 'Color', [0.5 0.5 0.5], 'LineStyle', '--');
-        line(xl, [median_GFP_pool median_GFP_pool], 'Color', [0.5 0.5 0.5], 'LineStyle', '--');
+        line(xl, [threshold_GFP_pool threshold_GFP_pool], 'Color', [0.5 0.5 0.5], 'LineStyle', '--');
         
         scatter(SSI(high_fid_idx), mean_GFP(high_fid_idx), 40, 'g', 'LineWidth', 1.5);
-        legend('All Epochs (Color=Score)', 'Median Boundaries', 'Selected High Quality');
+        legend('All Epochs (Color=Score)', 'Threshold Boundaries', 'Selected High Quality');
     else
         legend('All Epochs (Color=Score)');
     end
@@ -282,7 +292,7 @@ else
 end
 
 [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = ...
-    GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, empiricalLogMeanCOV, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_artifacts);
+    GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, empiricalLogMeanCOV, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_sensai);
 
 % Update history
 com = ['% GEDAI_empirical (Phase 1 Log-Euclidean mean selection followed by Phase 2 denoising)' newline com];

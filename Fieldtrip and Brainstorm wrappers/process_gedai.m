@@ -55,10 +55,10 @@ function sProcess = GetDescription() %#ok<DEFNU>
     % === Reference matrix type
     sProcess.options.label2.Comment = '<B>Leadfield matrix</B>';
     sProcess.options.label2.Type    = 'label';
-    sProcess.options.ref_matrix_type.Comment = {'Freesurfer precomputed (for standard EEG electrode locations)', 'Freesurfer interpolated (for non-standard EEG electrode locations)', 'Brainstorm headmodel (custom for M/EEG)'; ...
-                                                'fs_precomputed', 'fs_interpolated', 'bst_headmodel'};
+    sProcess.options.ref_matrix_type.Comment = {'Freesurfer precomputed (standard locations)', 'Freesurfer interpolated (non-standard locations)', 'Brainstorm headmodel (custom M/EEG)', 'Empirical (custom high-fidelity reference)'; ...
+                                                'fs_precomputed', 'fs_interpolated', 'bst_headmodel', 'auto'};
     sProcess.options.ref_matrix_type.Type    = 'radio_label';
-    sProcess.options.ref_matrix_type.Value   = 'bst_headmodel';
+    sProcess.options.ref_matrix_type.Value   = 'auto';
     % === Parallel processing
     sProcess.options.label3.Comment   = '<BR>';
     sProcess.options.label3.Type      = 'label';
@@ -101,6 +101,9 @@ function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_m
         case 'fs_precomputed',  ref_matrix_type = 'Freesurfer (precomputed)';
         case 'fs_interpolated', ref_matrix_type = 'Freesurfer (interpolated)';
         case 'bst_headmodel',   ref_matrix_type = 'Brainstorm leadfield';
+        case 'auto',            ref_matrix_type = 'Empirical';
+        case 'empirical',       ref_matrix_type = 'Empirical'; % Legacy support
+        otherwise,              ref_matrix_type = 'Unknown';
     end
     parallel             = sProcess.options.parallel.Value;
     visualize_artifacts  = sProcess.options.visualize_artifacts.Value;
@@ -231,7 +234,8 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             % STEP 3: HEAD MODEL
             % =========================================================
             Gain_avref = [];
-            if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+            is_empirical = ismember(sProcess.options.ref_matrix_type.Value, {'auto', 'empirical'});
+            if strcmp(ref_matrix_type, 'Brainstorm leadfield') || is_empirical
                 HeadModelFile = [];
                 sStudyData = bst_get('Study', sInput.iStudy);
                 sStudyChan = bst_get('Study', iStudyChannel);
@@ -279,15 +283,22 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 sInputMAG.A = sInputFiltered.A(mag_idx_in_filtered, :);
                 EEG_MAG = brainstorm2eeglab(sInputMAG, ChannelMatMAG);
                 if length(sInputMAG.TimeVector) > 1, EEG_MAG.srate = 1 / mean(diff(sInputMAG.TimeVector)); end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                if strcmp(sProcess.options.ref_matrix_type.Value, 'bst_headmodel') || (is_empirical && ~isempty(Gain_avref))
                     Gain_MAG = Gain_avref(mag_idx_in_filtered, :);
                     ref_matrix_param_MAG = Gain_MAG * Gain_MAG';
-                elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
+                elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_precomputed')
                     ref_matrix_param_MAG = 'precomputed';
-                else
+                elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_interpolated')
                     ref_matrix_param_MAG = 'interpolated';
+                else
+                    ref_matrix_param_MAG = sProcess.options.ref_matrix_type.Value; % 'auto'
                 end
-                [EEGclean_MAG, EEGartifacts_MAG] = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                
+                if is_empirical
+                    [EEGclean_MAG, EEGartifacts_MAG] = GEDAI_empirical(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                else
+                    [EEGclean_MAG, EEGartifacts_MAG] = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                end
 
                 % --- GRAD ---
                 ChannelMatGRAD = ChannelMatFiltered;
@@ -296,15 +307,22 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 sInputGRAD.A = sInputFiltered.A(grad_idx_in_filtered, :);
                 EEG_GRAD = brainstorm2eeglab(sInputGRAD, ChannelMatGRAD);
                 if length(sInputGRAD.TimeVector) > 1, EEG_GRAD.srate = 1 / mean(diff(sInputGRAD.TimeVector)); end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                if strcmp(sProcess.options.ref_matrix_type.Value, 'bst_headmodel') || (is_empirical && ~isempty(Gain_avref))
                     Gain_GRAD = Gain_avref(grad_idx_in_filtered, :);
                     ref_matrix_param_GRAD = Gain_GRAD * Gain_GRAD';
-                elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
+                elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_precomputed')
                     ref_matrix_param_GRAD = 'precomputed';
-                else
+                elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_interpolated')
                     ref_matrix_param_GRAD = 'interpolated';
+                else
+                    ref_matrix_param_GRAD = sProcess.options.ref_matrix_type.Value; % 'auto'
                 end
-                [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                
+                if is_empirical
+                    [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI_empirical(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                else
+                    [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                end
 
                 % --- Recombine ---
                 EEGclean = brainstorm2eeglab(sInputFiltered, ChannelMatFiltered);
@@ -340,14 +358,22 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 if length(sInputFiltered.TimeVector) > 1
                     EEG.srate = 1 / mean(diff(sInputFiltered.TimeVector));
                 end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                if strcmp(sProcess.options.ref_matrix_type.Value, 'bst_headmodel') || (is_empirical && ~isempty(Gain_avref))
                     ref_matrix_param = Gain_avref * Gain_avref';
-                elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
+                elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_precomputed')
                     ref_matrix_param = 'precomputed';
-                else
+                elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_interpolated')
                     ref_matrix_param = 'interpolated';
+                else
+                    ref_matrix_param = sProcess.options.ref_matrix_type.Value; % 'auto'
                 end
-                [EEGclean, EEGartifacts] = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                
+                if is_empirical
+                    [EEGclean, EEGartifacts] = GEDAI_empirical(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                else
+                    [EEGclean, EEGartifacts] = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, signal_type, visualize_sensai);
+                end
+                
             end
 
             % =========================================================
