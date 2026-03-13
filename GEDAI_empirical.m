@@ -200,39 +200,40 @@ n_hq_final = sum(hq_combined_mask);
 
 fprintf('GEDAI_empirical: PHASE 1 - Found %d epochs passing both ENOVA and SSI >= 0.4 criteria.\n', n_hq_final);
 
-% Normalize to [0,1] range (only considering final high-quality epochs)
-norm_SSI = -inf(size(SSI));
-norm_GFP = -inf(size(mean_GFP));
+% 4. Top-Right Quadrant Selection (within top 40% SSI pool)
+hq_idx_list = find(hq_combined_mask);
+empirical_score = zeros(size(SSI));
 
-if n_hq_final > 0
-    hq_idx_list = find(hq_combined_mask);
+if ~isempty(hq_idx_list)
+    % Target pool size (40% of total epochs)
+    n_pool_target = max(1, round(0.40 * n_epochs));
     
-    vals_SSI = SSI(hq_idx_list);
-    min_SSI = min(vals_SSI); max_SSI = max(vals_SSI);
-    if max_SSI > min_SSI
-        norm_SSI(hq_idx_list) = (vals_SSI - min_SSI) / (max_SSI - min_SSI);
-    else
-        norm_SSI(hq_idx_list) = 1;
-    end
+    % Stage 1: Sort HQ epochs by SSI and take the top pool_target
+    [~, sort_ssi_idx] = sort(SSI(hq_idx_list), 'descend');
+    n_pool_actual = min(length(hq_idx_list), n_pool_target);
+    pool_idx = hq_idx_list(sort_ssi_idx(1:n_pool_actual));
     
-    vals_GFP = mean_GFP(hq_idx_list);
-    min_GFP = min(vals_GFP); max_GFP = max(vals_GFP);
-    if max_GFP > min_GFP
-        norm_GFP(hq_idx_list) = (vals_GFP - min_GFP) / (max_GFP - min_GFP);
-    else
-        norm_GFP(hq_idx_list) = 1;
-    end
+    % Stage 2: Identify Top-Right Quadrant within the SSI pool
+    % Calculate medians within the pool
+    pool_SSI = SSI(pool_idx);
+    pool_GFP = mean_GFP(pool_idx);
+    median_SSI_pool = median(pool_SSI);
+    median_GFP_pool = median(pool_GFP);
+    
+    % Final selection: Quadrant logic
+    high_fid_idx = pool_idx(pool_SSI >= median_SSI_pool & pool_GFP >= median_GFP_pool);
+    
+    n_top = length(high_fid_idx);
+    
+    % For visualization: Highlight selection stages
+    empirical_score(pool_idx) = 0.5;   % In the SSI pool
+    empirical_score(high_fid_idx) = 1; % Final selection
+else
+    high_fid_idx = [];
+    n_top = 0;
 end
 
-% Combined score: 80% SSI, 20% GFP weight
-empirical_score = 0.8 * norm_SSI + 0.2 * norm_GFP;
-
-% Select top 10% of total epochs, but limited by available HQ epochs
-n_top = min(n_hq_final, max(1, round(0.10 * n_epochs)));
-[~, sort_idx] = sort(empirical_score, 'descend');
-high_fid_idx = sort_idx(1:n_top);
-
-fprintf('GEDAI_empirical: Identified %d high-fidelity epochs out of %d available high-quality epochs (from %d total) using weighted scoring.\n', n_top, n_hq_final, n_epochs);
+fprintf('GEDAI_empirical: Identified %d high-fidelity epochs out of %d SSI pool candidates (from %d total) using top-right quadrant logic.\n', n_top, n_pool_actual, n_epochs);
 
 if isempty(high_fid_idx)
     warning('GEDAI_empirical: No high-quality epochs found (ENOVA and SSI criteria). Falling back to standard %s matrix.', ref_matrix_type_internal);
@@ -255,8 +256,13 @@ if visualize_artifacts && ~ischar(empiricalLogMeanCOV)
     figure('Name', 'GEDAI Empirical Selection');
     scatter(SSI, mean_GFP, 30, empirical_score, 'filled', 'MarkerFaceAlpha', 0.4); hold on;
     if ~isempty(high_fid_idx)
+        % Draw quadrant lines (relative to pool medians)
+        xl = xlim; yl = ylim;
+        line([median_SSI_pool median_SSI_pool], yl, 'Color', [0.5 0.5 0.5], 'LineStyle', '--');
+        line(xl, [median_GFP_pool median_GFP_pool], 'Color', [0.5 0.5 0.5], 'LineStyle', '--');
+        
         scatter(SSI(high_fid_idx), mean_GFP(high_fid_idx), 40, 'g', 'LineWidth', 1.5);
-        legend('All Epochs (Color=Score)', 'Selected High Quality');
+        legend('All Epochs (Color=Score)', 'Median Boundaries', 'Selected High Quality');
     else
         legend('All Epochs (Color=Score)');
     end
