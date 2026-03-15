@@ -56,9 +56,9 @@ function sProcess = GetDescription() %#ok<DEFNU>
     sProcess.options.label2.Comment = '<B>Leadfield matrix</B>';
     sProcess.options.label2.Type    = 'label';
     sProcess.options.ref_matrix_type.Comment = {'Freesurfer precomputed (standard locations)', 'Freesurfer interpolated (non-standard locations)', 'Brainstorm headmodel (custom M/EEG)', 'Empirical (custom high-fidelity reference)'; ...
-                                                'fs_precomputed', 'fs_interpolated', 'bst_headmodel', 'auto'};
+                                                'fs_precomputed', 'fs_interpolated', 'bst_headmodel', 'empirical'};
     sProcess.options.ref_matrix_type.Type    = 'radio_label';
-    sProcess.options.ref_matrix_type.Value   = 'auto';
+    sProcess.options.ref_matrix_type.Value   = 'empirical';
     % === Parallel processing
     sProcess.options.label3.Comment   = '<BR>';
     sProcess.options.label3.Type      = 'label';
@@ -101,8 +101,7 @@ function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_m
         case 'fs_precomputed',  ref_matrix_type = 'Freesurfer (precomputed)';
         case 'fs_interpolated', ref_matrix_type = 'Freesurfer (interpolated)';
         case 'bst_headmodel',   ref_matrix_type = 'Brainstorm leadfield';
-        case 'auto',            ref_matrix_type = 'Empirical';
-        case 'empirical',       ref_matrix_type = 'Empirical'; % Legacy support
+        case 'empirical',       ref_matrix_type = 'Empirical';
         otherwise,              ref_matrix_type = 'Unknown';
     end
     parallel             = sProcess.options.parallel.Value;
@@ -234,7 +233,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             % STEP 3: HEAD MODEL
             % =========================================================
             Gain_avref = [];
-            is_empirical = ismember(sProcess.options.ref_matrix_type.Value, {'auto', 'empirical'});
+            is_empirical = strcmpi(sProcess.options.ref_matrix_type.Value, 'empirical');
             if strcmp(ref_matrix_type, 'Brainstorm leadfield') || is_empirical
                 HeadModelFile = [];
                 sStudyData = bst_get('Study', sInput.iStudy);
@@ -291,7 +290,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_interpolated')
                     ref_matrix_param_MAG = 'interpolated';
                 else
-                    ref_matrix_param_MAG = sProcess.options.ref_matrix_type.Value; % 'auto'
+                    ref_matrix_param_MAG = sProcess.options.ref_matrix_type.Value; % 'empirical'
                 end
                 
                 if is_empirical
@@ -315,7 +314,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_interpolated')
                     ref_matrix_param_GRAD = 'interpolated';
                 else
-                    ref_matrix_param_GRAD = sProcess.options.ref_matrix_type.Value; % 'auto'
+                    ref_matrix_param_GRAD = sProcess.options.ref_matrix_type.Value; % 'empirical'
                 end
                 
                 if is_empirical
@@ -365,7 +364,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 elseif strcmp(sProcess.options.ref_matrix_type.Value, 'fs_interpolated')
                     ref_matrix_param = 'interpolated';
                 else
-                    ref_matrix_param = sProcess.options.ref_matrix_type.Value; % 'auto'
+                    ref_matrix_param = sProcess.options.ref_matrix_type.Value; % 'empirical'
                 end
                 
                 if is_empirical

@@ -51,32 +51,38 @@ p = fileparts(which('GEDAI'));
 addpath(fullfile(p, 'auxiliaries'));
 
 %% --- PHASE 0: Sanity-Check if High-Quality Epochs Exist ---
-disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
-% Determine anchor for sanity check
-if ~ischar(ref_matrix_type)
-    anchor0 = ref_matrix_type; % User provided matrix (e.g. Brainstorm MEG leadfield)
-else
-    anchor0 = 'precomputed'; % Default EEG template
-end
+if ischar(ref_matrix_type) && strcmpi(ref_matrix_type, 'auto')
+    disp([newline 'GEDAI_empirical: PHASE 0 - Sanity-Check if High-Quality Epochs Exist...']);
+    % Determine anchor for sanity check
+    anchor0 = 'precomputed'; % Default EEG template for 'auto' mode
 
-try
-    [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, anchor0, parallel, false, inf, signal_type, false);
-catch err
-    % Fallback only makes sense for EEG templates
-    if ischar(anchor0) && strcmpi(signal_type, 'eeg') && contains(err.message, 'Electrode labels not found')
-        disp('GEDAI_empirical: PHASE 0 fallback - Retrying with "interpolated" leadfield...');
-        [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'interpolated', parallel, false, inf, signal_type, false);
-    else
-        rethrow(err);
+    try
+        [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, anchor0, parallel, false, inf, signal_type, false);
+    catch err
+        % Fallback only makes sense for EEG templates
+        if strcmpi(signal_type, 'eeg') && contains(err.message, 'Electrode labels not found')
+            disp('GEDAI_empirical: PHASE 0 fallback - Retrying with "interpolated" leadfield...');
+            [~, ~, ~, ~, ~, ~, ENOVA0] = GEDAI(EEGin, 'auto', epoch_size_in_cycles, lowcut_frequency, 'interpolated', parallel, false, inf, signal_type, false);
+        else
+            rethrow(err);
+        end
     end
-end
 
-hq_mask = ENOVA0 <= min_ENOVA_per_epoch;
-n_hq = sum(hq_mask);
-fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
+    hq_mask = ENOVA0 <= min_ENOVA_per_epoch;
+    n_hq = sum(hq_mask);
+    fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
 
-if n_hq < 3
-    warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
+    if n_hq < 3
+        warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
+    end
+else
+    if ischar(ref_matrix_type)
+        mode_str = ref_matrix_type;
+    else
+        mode_str = 'Custom Matrix';
+    end
+    disp([newline 'GEDAI_empirical: Skipping PHASE 0 as requested (Mode: ' mode_str ')...']);
+    hq_mask = [];
 end
 
 %% --- PHASE 1: Empirical High-Quality Epoch Selection ---
@@ -178,7 +184,9 @@ mean_GFP = -inf(1, n_epochs);
 epoch_covs = cell(1, n_epochs);
 
 % Resample Phase 0 mask to match Phase 1 resolution if needed
-if length(hq_mask) ~= n_epochs
+if isempty(hq_mask)
+    hq_mask_resampled = true(1, n_epochs);
+elseif length(hq_mask) ~= n_epochs
     fprintf('GEDAI_empirical: Resampling Phase 0 mask (%d) to match Phase 1 epochs (%d)...\n', length(hq_mask), n_epochs);
     xq = linspace(1, length(hq_mask), n_epochs);
     hq_mask_resampled = interp1(1:length(hq_mask), double(hq_mask), xq, 'nearest') > 0.5;
