@@ -67,7 +67,7 @@ use_parallel = logical(out.parallel_processing);
 visualize_artifacts = logical(out.visualization_A);
 
 if ismember(ref_matrix_type, {'auto', 'empirical'})
-    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI_empirical(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold, 'eeg');
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI_empirical(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold, 'eeg', visualize_artifacts);
 else
     [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG,artifact_threshold,epoch_size_in_cycles, lowcut_frequency,ref_matrix_type,use_parallel,visualize_artifacts, ENOVA_threshold, [], visualize_artifacts);
 end
