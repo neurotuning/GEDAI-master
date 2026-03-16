@@ -814,9 +814,12 @@ end
         EEGdata_epoched = reshape(eeg_data_temp, size(eeg_data_temp, 1), epoch_samples, []);
         EEGartifacts_epoched = reshape(artifact_data_temp, size(artifact_data_temp, 1), epoch_samples, []);
         
-        COV_emp_array_after = cell(num_epochs, 1);
-        COV_emp_array_artifacts = cell(num_epochs, 1);
-        for epo = 1:num_epochs
+        % Recalculate number of epochs after potential rejection
+        num_epochs_after = size(EEGdata_epoched, 3); 
+        
+        COV_emp_array_after = cell(num_epochs_after, 1);
+        COV_emp_array_artifacts = cell(num_epochs_after, 1);
+        for epo = 1:num_epochs_after
             COV_emp_array_after{epo} = cov(EEGdata_epoched(:,:,epo)');
             COV_emp_array_artifacts{epo} = cov(EEGartifacts_epoched(:,:,epo)');
         end
