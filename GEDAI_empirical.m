@@ -72,7 +72,7 @@ if ischar(ref_matrix_type) && strcmpi(ref_matrix_type, 'auto')
     n_hq = sum(hq_mask);
     fprintf('GEDAI_empirical: PHASE 0 - Found %d epochs with ENOVA <= %.2f\n', n_hq, min_ENOVA_per_epoch);
 
-    if n_hq < 3
+    if n_hq < 1
         warning('GEDAI_empirical: Sanity check failed! Only %d epochs meet the min_ENOVA_per_epoch threshold.', n_hq);
     end
 else
@@ -175,9 +175,16 @@ basis_ref = Vref(:, idxRef(1:3));
 
 % 3. Calculate SSI/GFP per 1s epoch
 emp_epoch_size = 1;
-samples_per_epoch = srate * emp_epoch_size;
+samples_per_epoch = round(srate * emp_epoch_size);
 n_epochs = floor(size(EEGemp.data, 2) / samples_per_epoch);
-data_epoched = reshape(EEGemp.data(:, 1:(n_epochs*samples_per_epoch)), size(EEGemp.data,1), samples_per_epoch, []);
+
+if n_epochs > 0
+    num_samples_to_take = n_epochs * samples_per_epoch;
+    % Use explicit 3-dimension vector for reshape and ensure integer-valued sizes
+    data_epoched = reshape(EEGemp.data(:, 1:num_samples_to_take), [size(EEGemp.data,1), samples_per_epoch, n_epochs]);
+else
+    error('GEDAI_empirical: Data length is too short for a single 1s epoch.');
+end
 
 SSI = -inf(1, n_epochs);
 mean_GFP = -inf(1, n_epochs);
