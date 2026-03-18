@@ -55,7 +55,7 @@ function sProcess = GetDescription() %#ok<DEFNU>
     % === Reference matrix type
     sProcess.options.label2.Comment = '<B>Leadfield matrix</B>';
     sProcess.options.label2.Type    = 'label';
-    sProcess.options.ref_matrix_type.Comment = {'Auto (Template anchor -> Empirical fallback)', 'Freesurfer precomputed (standard locations)', 'Freesurfer interpolated (non-standard locations)', 'Brainstorm headmodel (custom M/EEG)', 'Empirical (forced high-fidelity selection)'; ...
+    sProcess.options.ref_matrix_type.Comment = {'Auto', 'Freesurfer precomputed (standard locations)', 'Freesurfer interpolated (non-standard locations)', 'Brainstorm headmodel (custom M/EEG)', 'Empirical (forced high-fidelity selection)'; ...
                                                 'auto', 'fs_precomputed', 'fs_interpolated', 'bst_headmodel', 'empirical'};
     sProcess.options.ref_matrix_type.Type    = 'radio_label';
     sProcess.options.ref_matrix_type.Value   = 'auto';
