@@ -55,10 +55,10 @@ function sProcess = GetDescription() %#ok<DEFNU>
     % === Reference matrix type
     sProcess.options.label2.Comment = '<B>Leadfield matrix</B>';
     sProcess.options.label2.Type    = 'label';
-    sProcess.options.ref_matrix_type.Comment = {'Freesurfer precomputed (standard locations)', 'Freesurfer interpolated (non-standard locations)', 'Brainstorm headmodel (custom M/EEG)', 'Empirical (custom high-fidelity reference)'; ...
-                                                'fs_precomputed', 'fs_interpolated', 'bst_headmodel', 'empirical'};
+    sProcess.options.ref_matrix_type.Comment = {'Auto (Template anchor -> Empirical fallback)', 'Freesurfer precomputed (standard locations)', 'Freesurfer interpolated (non-standard locations)', 'Brainstorm headmodel (custom M/EEG)', 'Empirical (forced high-fidelity selection)'; ...
+                                                'auto', 'fs_precomputed', 'fs_interpolated', 'bst_headmodel', 'empirical'};
     sProcess.options.ref_matrix_type.Type    = 'radio_label';
-    sProcess.options.ref_matrix_type.Value   = 'empirical';
+    sProcess.options.ref_matrix_type.Value   = 'auto';
     % === Parallel processing
     sProcess.options.label3.Comment   = '<BR>';
     sProcess.options.label3.Type      = 'label';
@@ -98,6 +98,7 @@ function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_m
     epoch_size_in_cycles    = sProcess.options.epoch_size_in_cycles.Value{1};
     lowcut_frequency        = sProcess.options.lowcut_frequency.Value{1};
     switch sProcess.options.ref_matrix_type.Value
+        case 'auto',            ref_matrix_type = 'Auto';
         case 'fs_precomputed',  ref_matrix_type = 'Freesurfer (precomputed)';
         case 'fs_interpolated', ref_matrix_type = 'Freesurfer (interpolated)';
         case 'bst_headmodel',   ref_matrix_type = 'Brainstorm leadfield';
@@ -233,7 +234,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             % STEP 3: HEAD MODEL
             % =========================================================
             Gain_avref = [];
-            is_empirical = strcmpi(sProcess.options.ref_matrix_type.Value, 'empirical');
+            is_empirical = ismember(sProcess.options.ref_matrix_type.Value, {'auto', 'empirical'});
             if strcmp(ref_matrix_type, 'Brainstorm leadfield') || is_empirical
                 HeadModelFile = [];
                 sStudyData = bst_get('Study', sInput.iStudy);
@@ -251,17 +252,25 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 if isempty(HeadModelFile) && ~isempty(sStudyChan.HeadModel)
                     HeadModelFile = sStudyChan.HeadModel(1).FileName;
                 end
-                if isempty(HeadModelFile)
-                    bst_report('Error', sProcess, sInput, 'No head model found.');
-                    continue;
-                end
 
-                HeadModel    = in_bst_headmodel(HeadModelFile, 0, 'Gain');
-                Gain_filtered = HeadModel.Gain(eeg_meg_idx, :);
-                if strcmp(signal_type, 'eeg')
-                    Gain_avref = Gain_filtered - mean(Gain_filtered, 1);
+                if isempty(HeadModelFile)
+                    % For "Brainstorm leadfield", a head model is MANDATORY
+                    if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                        bst_report('Error', sProcess, sInput, 'No head model found.');
+                        continue;
+                    else
+                        % For "Auto" or "Empirical", a head model is OPTIONAL (will fallback to standard template)
+                        disp('GEDAI> No Brainstorm head model found. Proceeding with standard template anchor.');
+                    end
                 else
-                    Gain_avref = Gain_filtered;
+                    % Head model found, load it
+                    HeadModel    = in_bst_headmodel(HeadModelFile, 0, 'Gain');
+                    Gain_filtered = HeadModel.Gain(eeg_meg_idx, :);
+                    if strcmp(signal_type, 'eeg')
+                        Gain_avref = Gain_filtered - mean(Gain_filtered, 1);
+                    else
+                        Gain_avref = Gain_filtered;
+                    end
                 end
             end
 
