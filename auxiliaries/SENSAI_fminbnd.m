@@ -1,4 +1,4 @@
-function [optimalThreshold, maxSENSAIScore] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs)
+function [optimalThreshold, maxSENSAIScore] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov_signal, evecs_Template_cov_noise, signal_type, SSI_top_PCs)
 
 max_number_of_epochs = 500; % if EEG recording is long (default = 500 epochs)
 number_of_epochs = size(COV, 3);
@@ -15,7 +15,7 @@ COV = COV(:,:,random_epochs);
 else
 end
 
-sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov,signal_type, SSI_top_PCs);
+sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov_signal, evecs_Template_cov_noise, signal_type, SSI_top_PCs);
 [optimalThreshold, negMaxSENSAIScore] = local_fminbnd(sensaifunc, minThreshold, maxThreshold, 1e-2);
 maxSENSAIScore = -negMaxSENSAIScore;
 
@@ -39,9 +39,9 @@ maxSENSAIScore = -negMaxSENSAIScore;
 % negMaxSENSAIScore = results.MinObjective;
 
 
-    function objective = SENSAIObjective(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj,signal_type, SSI_top_PCs)
+    function objective = SENSAIObjective(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_signal_obj, evecs_Template_cov_noise_obj, signal_type, SSI_top_PCs)
         % Compute the negative SENSAI score for the objective function
-        [~, ~, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj, signal_type, SSI_top_PCs);
+        [~, ~, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_signal_obj, evecs_Template_cov_noise_obj, signal_type, SSI_top_PCs);
         objective = -SENSAI_score;
     end
 end

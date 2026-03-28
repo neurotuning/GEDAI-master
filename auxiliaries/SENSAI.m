@@ -1,4 +1,4 @@
-function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier, cov_total, evecs_Template_cov, signal_type, SSI_top_PCs)
+function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier, cov_total, evecs_Template_cov_signal, evecs_Template_cov_noise, signal_type, SSI_top_PCs)
 
                        %   Evaluates GEDAI cleaning quality for a given threshold.
 %%   Creative Commons License
@@ -61,7 +61,7 @@ for epoch = 1:num_epochs
     else
         [evecs_signal, ~] = eigs(cov_signal, SSI_top_PCs);
     end
-    SIGNAL_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_signal, evecs_Template_cov));
+    SIGNAL_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_signal, evecs_Template_cov_signal));
 
     
     % NOISE SUBSPACE similarity
@@ -73,7 +73,7 @@ for epoch = 1:num_epochs
     else
         [evecs_noise, ~] = eigs(cov_noise, SSI_top_PCs);
     end
-    NOISE_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_noise, evecs_Template_cov));
+    NOISE_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_noise, evecs_Template_cov_noise));
 
 end
 
