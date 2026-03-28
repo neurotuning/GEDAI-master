@@ -136,54 +136,80 @@ if refCOV_top_PCs < SSI_top_PCs
     warning('GEDAI:LowRefCOVPCs', 'refCOV variance appears to be concentrated in too few principal components. Verify that leadfield matrix is well constructed.');
 end
 
+% Always use combinations of 3 PCs from the top 5
+num_top_pcs_pool = min(5, N_EEG_electrodes);
+num_pcs_to_choose = min(3, num_top_pcs_pool);
 
-% Apply refCOV_top_PCs
-    % Use eigs for truncated decomposition (efficiency optimization)
-    [evecs_Template_cov, evals_Template_cov] = eigs(refCOV_reg, refCOV_top_PCs);
-    % Ensure sorted order
-    [~, sidxS_Template_cov] = sort(diag(evals_Template_cov), 'descend');
-    evecs_Template_cov = evecs_Template_cov(:, sidxS_Template_cov);
+% Get top pool PCs from regularized refCOV
+[evecs_pool, evals_pool] = eigs(refCOV_reg, num_top_pcs_pool);
+[~, sidx_pool] = sort(diag(evals_pool), 'descend');
+evecs_pool = evecs_pool(:, sidx_pool);
 
+combinations = nchoosek(1:num_top_pcs_pool, num_pcs_to_choose);
+num_combos = size(combinations, 1);
+
+best_SENSAI_score = -Inf;
+optimal_artifact_threshold = NaN;
+evecs_Template_cov = [];
+best_combo = [];
 
 maxThreshold = 12;
 
-% --- Optimization Method Switch ---
-switch optimization_type
-    case 'parabolic'
-        [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs);
+% Loop through candidate PC combinations 
+for c = 1:num_combos
+    current_combo = combinations(c, :);
+    evecs_Template_cov_iter = evecs_pool(:, current_combo);
     
-    case 'grid' % Restored grid search functionality
-        automatic_thresholding_step_size = 1/3;
-        AutomaticThresholdSweep = minThreshold:automatic_thresholding_step_size:maxThreshold;
+    % --- Optimization Method Switch ---
+    switch optimization_type
+        case 'parabolic'
+            [opt_thresh, current_SENSAI_score] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov_iter, signal_type, SSI_top_PCs);
+            
+        case 'grid' % Restored grid search functionality
+            automatic_thresholding_step_size = 1/3;
+            AutomaticThresholdSweep = minThreshold:automatic_thresholding_step_size:maxThreshold;
+            
+            SIGNAL_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
+            NOISE_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
+            SENSAI_score = zeros(1, length(AutomaticThresholdSweep));
+            if parallel
+                parfor threshold_index=1:length(AutomaticThresholdSweep)
+                    artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
+                    % Call SENSAI function
+                    [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov_iter, signal_type, SSI_top_PCs);
+                end
+            else
+                for threshold_index=1:length(AutomaticThresholdSweep)
+                    artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
+                    % Call SENSAI function
+                    [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov_iter, signal_type, SSI_top_PCs);
+                end
+            end
+            [~, SENSAI_index] = max(SENSAI_score);
+            NOISE_changepoint_index = findchangepts(diff(smoothdata(NOISE_subspace_similarity, "movmean",6)),Statistic="mean", MaxNumChanges=2);
         
-        SIGNAL_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
-        NOISE_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
-        SENSAI_score = zeros(1, length(AutomaticThresholdSweep));
-        if parallel
-            parfor threshold_index=1:length(AutomaticThresholdSweep)
-                artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
-                % Call SENSAI function
-                [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs);
+            if isempty(NOISE_changepoint_index)
+                NOISE_changepoint_index = length(AutomaticThresholdSweep);      
             end
-        else
-            for threshold_index=1:length(AutomaticThresholdSweep)
-                artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
-                % Call SENSAI function
-                [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs);
+            if SENSAI_index > NOISE_changepoint_index(1)
+                opt_thresh = AutomaticThresholdSweep(NOISE_changepoint_index(1));
+                current_SENSAI_score = SENSAI_score(NOISE_changepoint_index(1));
+            else
+                opt_thresh = AutomaticThresholdSweep(SENSAI_index);
+                current_SENSAI_score = SENSAI_score(SENSAI_index);
             end
-        end
-        [~, SENSAI_index] = max(SENSAI_score);
-        NOISE_changepoint_index = findchangepts(diff(smoothdata(NOISE_subspace_similarity, "movmean",6)),Statistic="mean", MaxNumChanges=2);
+    end
     
-        if isempty(NOISE_changepoint_index)
-            NOISE_changepoint_index = length(AutomaticThresholdSweep);      
-        end
-        if SENSAI_index > NOISE_changepoint_index(1)
-            optimal_artifact_threshold = AutomaticThresholdSweep(NOISE_changepoint_index(1));
-        else
-            optimal_artifact_threshold = AutomaticThresholdSweep(SENSAI_index);
-        end
+    % Update if we found a better combination
+    if current_SENSAI_score > best_SENSAI_score
+        best_SENSAI_score = current_SENSAI_score;
+        optimal_artifact_threshold = opt_thresh;
+        evecs_Template_cov = evecs_Template_cov_iter;
+        best_combo = current_combo;
+    end
 end
+
+disp(['best refCOV PCs: [' num2str(best_combo) ']']);
 
 artifact_threshold = optimal_artifact_threshold;
 % Pre-calculate cosine weights for efficiency
