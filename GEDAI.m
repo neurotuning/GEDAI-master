@@ -326,10 +326,15 @@ clear mra_hp
     broadband_artifact_threshold_type = 'auto-';
     broadband_minThreshold = 0;
     broadband_maxThreshold = 12;
-    [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold);
+    [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA, broadband_SSI_angles] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold);
     SENSAI_score_per_band = broadband_sensai;
     artifact_threshold_per_band = broadband_thresh;
     ENOVA_per_band = broadband_ENOVA;
+
+    % Initialize storage for per-band visualization
+    SSI_angles_all_bands = cell(1, 1);
+    SSI_angles_all_bands{1} = broadband_SSI_angles;
+    SSI_labels_all_bands = {'Broadband'};
 
 
 
@@ -433,6 +438,8 @@ if parallel
         temp_sensai_scores = zeros(1, num_bands_to_process);
         temp_thresholds = zeros(1, num_bands_to_process);
         temp_enova_scores = zeros(1, num_bands_to_process);
+        temp_SSI_angles = cell(1, num_bands_to_process);
+        temp_SSI_labels = cell(1, num_bands_to_process);
         
         % MEMORY OPTIMIZED: Incremental band extraction in parallel
         parfor f = 1:num_bands_to_process
@@ -449,11 +456,11 @@ if parallel
             end
 
             try
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val, SSI_angles_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
             catch ME
                  % If OOM or other memory error, try single precision
                  warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val, SSI_angles_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
             end
             
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -461,11 +468,15 @@ if parallel
             temp_sensai_scores(f) = temp_sensai;
             temp_thresholds(f) = temp_thresh;
             temp_enova_scores(f) = temp_enova_val;
+            temp_SSI_angles{f} = SSI_angles_val;
+            temp_SSI_labels{f} = [num2str(current_center_freq, '%.2g') ' Hz'];
         end
         
         SENSAI_score_per_band = [SENSAI_score_per_band, temp_sensai_scores];
         artifact_threshold_per_band = [artifact_threshold_per_band, temp_thresholds];
         ENOVA_per_band = [ENOVA_per_band, temp_enova_scores];
+        SSI_angles_all_bands = [SSI_angles_all_bands, temp_SSI_angles];
+        SSI_labels_all_bands = [SSI_labels_all_bands, temp_SSI_labels];
         success_parallel = true;
     catch 
         warning('Parallel processing failed: %s. Switching to double precision non-parallel processing.');
@@ -494,12 +505,12 @@ if ~parallel || ~success_parallel
             end
             
             try
-             disp(['processing wavelet band = ' num2str(f)])   
-             [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
+              disp(['processing wavelet band = ' num2str(f)])   
+              [cleaned_band_data, ~, sensai_val, thresh_val, enova_val, SSI_angles_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
             
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val, SSI_angles_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
             end
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -507,6 +518,8 @@ if ~parallel || ~success_parallel
             SENSAI_score_per_band(f+1) = sensai_val;
             artifact_threshold_per_band(f+1) = thresh_val;
             ENOVA_per_band(f+1) = enova_val;
+            SSI_angles_all_bands{f+1} = SSI_angles_val;
+            SSI_labels_all_bands{f+1} = [num2str(current_center_freq, '%.2g') ' Hz'];
             
             % MEMORY OPTIMIZED: Clear band data immediately
             clear wavelet_data_band cleaned_band_data;
@@ -530,7 +543,7 @@ if ~parallel || ~success_parallel
                 current_minThreshold = -6;
             end
             
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val, SSI_angles_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold);
             disp(['processing wavelet band (single) = ' num2str(f)])
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -538,6 +551,8 @@ if ~parallel || ~success_parallel
             SENSAI_score_per_band(f+1) = sensai_val;
             artifact_threshold_per_band(f+1) = thresh_val;
             ENOVA_per_band(f+1) = enova_val;
+            SSI_angles_all_bands{f+1} = SSI_angles_val;
+            SSI_labels_all_bands{f+1} = [num2str(current_center_freq, '%.2g') ' Hz'];
             
             % MEMORY OPTIMIZED: Clear band data immediately
             clear wavelet_data_band cleaned_band_data;
@@ -819,6 +834,9 @@ end
         end
         
         SENSAI_visualization(refCOV, COV_emp_array_before, COV_emp_array_after, COV_emp_array_artifacts);
+        
+        % Generate tiled visualization for all bands
+        SENSAI_visualization_tiled(refCOV, SSI_angles_all_bands, SSI_labels_all_bands);
     end
 
 % Add command history to EEGLAB structure

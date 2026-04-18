@@ -107,14 +107,14 @@ function plot_3d_angles(angs_before, angs_after, angs_artifacts)
     lda_accuracy = (1 - lda_loss) * 100;
     
     ssi_after = prod(angs_after, 2);
+    nssi_after = prod(angs_artifacts, 2);
     
     xlabel('SSI \bf{PC_1}'); ylabel('SSI \bf{PC_2}'); zlabel('SSI \bf{PC_3}');
-    title(sprintf('After GEDAI: \\color[rgb]{0,0.7,0}Signal \\color{black}vs \\color{red}Noise \\color{black}Epochs \n\\color{black}Mean SSI: %.3f  | Classification Accuracy: %.1f%%', mean(ssi_after), lda_accuracy));
+    title(sprintf('After GEDAI: \\color[rgb]{0,0.7,0}Signal \\color{black}vs \\color{red}Noise \\color{black}Epochs \n\\color{black}Mean SSSI: %.3f | NSSI: %.3f  | Accuracy: %.1f%%', mean(ssi_after), mean(nssi_after), lda_accuracy));
     legend([h_star, h_clean, h_artifact], {'Leadfield Subspace', 'Cleaned Signal (SSSI)', 'Removed Noise (NSSI)'}, 'Location', 'best');
     grid on; view(45, 30);
     xlim([0 1]); ylim([0 1]); zlim([0 1]);
     
     sgtitle('Signal & Noise Subspace Similarity Index (SENSAI) per epoch');
-
 
 end

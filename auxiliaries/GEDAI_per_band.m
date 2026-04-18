@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold, maxThreshold)
+function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA, SSI_angles] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold, maxThreshold)
 
 if isempty(eeg_data)
     error('Cannot process empty data');
@@ -132,7 +132,7 @@ switch optimization_type
             parfor threshold_index=1:length(AutomaticThresholdSweep)
                 artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
                 % Call SENSAI function
-                [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval, Evec, noise_multiplier, COV, refCOV_triu, signal_type, SSI_top_PCs);
+                [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval, Evec, noise_multiplier, COV, refCOV_triu, signal_type);
             end
         else
             for threshold_index=1:length(AutomaticThresholdSweep)
@@ -227,4 +227,50 @@ if num_epochs > 0
 else
     ENOVA = 0;
 end
+
+%% SSI components for visualization (Optional output)
+if nargout > 5
+    SSI_top_PCs = 3;
+    num_channels = size(refCOV, 1);
+    if SSI_top_PCs > num_channels, SSI_top_PCs = num_channels; end
+    
+    [Vref, Dref] = eig(refCOV);
+    [~, idx] = sort(diag(Dref), 'descend');
+    basis_ref = Vref(:, idx(1:SSI_top_PCs));
+    
+    cleaned_epoched = reshape(cleaned_data(:, 1:len_to_use), size(cleaned_data, 1), epoch_samples, []);
+    
+    num_epochs = size(cleaned_epoched, 3);
+    angs_before = zeros(num_epochs, SSI_top_PCs);
+    angs_after = zeros(num_epochs, SSI_top_PCs);
+    angs_artifacts = zeros(num_epochs, SSI_top_PCs);
+    
+    for epo = 1:num_epochs
+        % Before
+        C_before = cov(original_epoched(:,:,epo)');
+        angs_before(epo, :) = extract_single_angles_inline(C_before, basis_ref, SSI_top_PCs);
+        % After
+        C_after = cov(cleaned_epoched(:,:,epo)');
+        angs_after(epo, :) = extract_single_angles_inline(C_after, basis_ref, SSI_top_PCs);
+        % Artifacts
+        C_artifacts = cov(artifacts_epoched(:,:,epo)');
+        angs_artifacts(epo, :) = extract_single_angles_inline(C_artifacts, basis_ref, SSI_top_PCs);
+    end
+    SSI_angles.angs_before = angs_before;
+    SSI_angles.angs_after = angs_after;
+    SSI_angles.angs_artifacts = angs_artifacts;
+end
+
+end
+
+function angs = extract_single_angles_inline(C, basis_ref, top_PCs)
+    if all(C(:) == 0) || any(isnan(C(:)))
+        angs = zeros(1, top_PCs);
+        return;
+    end
+    [V, D] = eig(C);
+    [~, idx] = sort(diag(D), 'descend');
+    basis_c = V(:, idx(1:top_PCs));
+    cos_theta = subspace_angles(basis_c, basis_ref);
+    angs = cos_theta(:)';
 end
