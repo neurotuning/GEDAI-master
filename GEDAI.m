@@ -321,11 +321,11 @@ clear mra_hp
 
     % ------------------ GEDAI ------------------------------
 
-    disp([newline 'SENSAI threshold detection...please wait']);
+    disp([newline 'SENSAI threshold detection (Conservative Broadband Pass)...']);
     broadband_optimization_type = 'parabolic';
-    broadband_artifact_threshold_type = 'auto-';
-    broadband_minThreshold = 0;
-    broadband_maxThreshold = 12;
+    broadband_artifact_threshold_type = 'auto--'; % Super Conservative
+    broadband_minThreshold = 0; % Lower numeric threshold = less aggressive
+    broadband_maxThreshold = 5; 
     [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA, broadband_SSI_angles] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold);
     SENSAI_score_per_band = broadband_sensai;
     artifact_threshold_per_band = broadband_thresh;

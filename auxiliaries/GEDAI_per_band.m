@@ -91,9 +91,11 @@ end
 %% Determine Artifact Threshold and Clean EEG
 %% Determine Noise Multiplier and Optimization Parameters
 if ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto')
-    if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1;
-    elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3;
-    elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6;
+    if strcmp(artifact_threshold_type,'auto++'), noise_multiplier = 0.5; % Super Aggressive
+    elseif strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; % Aggressive
+    elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3;  % Balanced
+    elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6;  % Conservative
+    elseif strcmp(artifact_threshold_type,'auto--'), noise_multiplier = 10; % Super Conservative
     else, noise_multiplier = 3; 
     end
 else

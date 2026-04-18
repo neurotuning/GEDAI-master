@@ -73,13 +73,17 @@ end
 s_i = (b_i - a_i) ./ max(a_i, b_i);
 s_i(isnan(s_i)) = 0; 
 
-% Final SENSAI_score: Product of Isolation and Accuracy
-% We only care about positive isolation (Noise is outside).
-% If s_i is negative, isolation is failed.
-s_i_clamped = max(0.01, s_i); % Use a small floor to avoid absolute zero during optimization
+% Final SENSAI_score: Multiplicative Accuracy & Isolation
+% 1. Clamp s_i to positive values (0.01 floor for stability)
+s_i_clamped = max(0.01, s_i);
 
-% The score is the average per-epoch product of Isolation and Signal Similarity
-% This maximizes SSSI subject to the 'Clearance' from noise.
-SENSAI_score = mean( s_i_clamped .* prod(clean_angles, 2) );
+% 2. Use noise_multiplier as an "Isolation Strictness" factor.
+% High multiplier = High requirement for a 'clear zone' around the signal.
+% Centered at 3 (Balanced), so exponent is multiplier/3.
+isolation_strictness = s_i_clamped .^ (noise_multiplier / 3);
+
+% 3. Combine with Signal Similarity
+% Score = Mean of [Accuracy * StrictIsolation]
+SENSAI_score = mean( isolation_strictness .* prod(clean_angles, 2) );
 
 end
