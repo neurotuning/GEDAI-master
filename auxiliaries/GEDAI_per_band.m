@@ -11,11 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-<<<<<<< Updated upstream
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA, SSI_angles] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold, maxThreshold)
-=======
 function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA, viz_data] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold, maxThreshold)
->>>>>>> Stashed changes
 
 if isempty(eeg_data)
     error('Cannot process empty data');
@@ -236,13 +232,13 @@ end
 
 %% SSI components for visualization (Optional output)
 if nargout > 5
-<<<<<<< Updated upstream
-    SSI_top_PCs = 3;
     num_channels = size(refCOV, 1);
-    if SSI_top_PCs > num_channels, SSI_top_PCs = num_channels; end
-=======
-    num_channels = size(refCOV, 1);
->>>>>>> Stashed changes
+    
+    if strcmpi(signal_type, 'meg')
+        SSI_top_PCs = 4;
+    else
+        SSI_top_PCs = 3;
+    end
     
     [Vref, Dref] = eig(refCOV);
     [~, idx] = sort(diag(Dref), 'descend');
@@ -250,12 +246,6 @@ if nargout > 5
     
     cleaned_epoched = reshape(cleaned_data(:, 1:len_to_use), size(cleaned_data, 1), epoch_samples, []);
     
-<<<<<<< Updated upstream
-    num_epochs = size(cleaned_epoched, 3);
-    angs_before = zeros(num_epochs, SSI_top_PCs);
-    angs_after = zeros(num_epochs, SSI_top_PCs);
-    angs_artifacts = zeros(num_epochs, SSI_top_PCs);
-=======
     num_epochs = size(original_epoched, 3);
     ssi_before = zeros(num_epochs, 1);
     lpow_before = zeros(num_epochs, 1);
@@ -263,24 +253,10 @@ if nargout > 5
     lpow_after = zeros(num_epochs, 1);
     ssi_artifacts = zeros(num_epochs, 1);
     lpow_artifacts = zeros(num_epochs, 1);
->>>>>>> Stashed changes
     
     for epo = 1:num_epochs
         % Before
         C_before = cov(original_epoched(:,:,epo)');
-<<<<<<< Updated upstream
-        angs_before(epo, :) = extract_single_angles_inline(C_before, basis_ref, SSI_top_PCs);
-        % After
-        C_after = cov(cleaned_epoched(:,:,epo)');
-        angs_after(epo, :) = extract_single_angles_inline(C_after, basis_ref, SSI_top_PCs);
-        % Artifacts
-        C_artifacts = cov(artifacts_epoched(:,:,epo)');
-        angs_artifacts(epo, :) = extract_single_angles_inline(C_artifacts, basis_ref, SSI_top_PCs);
-    end
-    SSI_angles.angs_before = angs_before;
-    SSI_angles.angs_after = angs_after;
-    SSI_angles.angs_artifacts = angs_artifacts;
-=======
         angs_before = subspace_angles(basis_ref, basis_vis_inline(C_before, SSI_top_PCs));
         ssi_before(epo) = prod(angs_before) ^ (1/SSI_top_PCs);
         lpow_before(epo) = 10 * log10(trace(C_before));
@@ -341,29 +317,16 @@ if nargout > 5
     viz_data.ssi_artifacts = ssi_artifacts_valid;
     viz_data.lpow_artifacts = lpow_artifacts_valid;
     viz_data.sensai_score = SENSAI_score;
->>>>>>> Stashed changes
 end
 
 end
 
-<<<<<<< Updated upstream
-function angs = extract_single_angles_inline(C, basis_ref, top_PCs)
-    if all(C(:) == 0) || any(isnan(C(:)))
-        angs = zeros(1, top_PCs);
-=======
 function basis = basis_vis_inline(C, top_PCs)
     if all(C(:) == 0) || any(isnan(C(:)))
         basis = zeros(size(C,1), top_PCs);
->>>>>>> Stashed changes
         return;
     end
     [V, D] = eig(C);
     [~, idx] = sort(diag(D), 'descend');
-<<<<<<< Updated upstream
-    basis_c = V(:, idx(1:top_PCs));
-    cos_theta = subspace_angles(basis_c, basis_ref);
-    angs = cos_theta(:)';
-=======
     basis = V(:, idx(1:top_PCs));
->>>>>>> Stashed changes
 end

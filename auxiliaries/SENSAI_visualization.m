@@ -46,14 +46,14 @@ angs_before = extract_angles(C_before, basis_ref, SSI_top_PCs);
 angs_after = extract_angles(C_after, basis_ref, SSI_top_PCs);
 angs_artifacts = extract_angles(C_artifacts, basis_ref, SSI_top_PCs);
 
+ssi_before    = prod(angs_before, 2);
+ssi_after     = prod(angs_after, 2);
+ssi_artifacts = prod(angs_artifacts, 2);
+
 %% 3. Native MATLAB Scatter Visualizations
 % 3D Principal Angles Scatter Plot
 plot_3d_angles(angs_before, angs_after, angs_artifacts);
 
-<<<<<<< Updated upstream
-end
-
-=======
 %% ── 3. Epoch power  (log10 of trace) ────────────────────────────────────
 lpow_before    = 10 * log10(extract_power(C_before));
 lpow_after     = 10 * log10(extract_power(C_after));
@@ -198,7 +198,6 @@ end
 
 
 %% ══════════════════════════════════════════════════════════════════════════
->>>>>>> Stashed changes
 function angs = extract_angles(C_array, basis_ref, top_PCs)
     num_emp = length(C_array);
     angs = zeros(num_emp, top_PCs);
@@ -264,4 +263,36 @@ function plot_3d_angles(angs_before, angs_after, angs_artifacts)
     
     sgtitle('Signal & Noise Subspace Similarity Index (SENSAI) per epoch');
 
+end
+
+function p = extract_power(C_array)
+    num_epo = length(C_array);
+    p = zeros(num_epo, 1);
+    for k = 1:num_epo
+        if isempty(C_array{k})
+            p(k) = 0;
+        else
+            p(k) = trace(C_array{k});
+        end
+    end
+end
+
+function draw_ellipse(ax, x, y, col, conf)
+    if numel(x) < 3; return; end
+    % Covariance and mean
+    C = cov(x, y);
+    mu = [mean(x), mean(y)];
+    [V, D] = eig(C);
+    
+    % Confidence interval (chi-squared for 2 DOF)
+    chi2_val = -2 * log(1 - conf);
+    t = linspace(0, 2*pi, 100);
+    dir1 = V(:,1) * sqrt(D(1,1) * chi2_val);
+    dir2 = V(:,2) * sqrt(D(2,2) * chi2_val);
+    
+    X = mu(1) + dir1(1)*cos(t) + dir2(1)*sin(t);
+    Y = mu(2) + dir1(2)*cos(t) + dir2(2)*sin(t);
+    
+    plot(ax, X, Y, '-', 'Color', col, 'LineWidth', 1.5);
+    patch(ax, X, Y, col, 'FaceAlpha', 0.1, 'EdgeColor', 'none');
 end
