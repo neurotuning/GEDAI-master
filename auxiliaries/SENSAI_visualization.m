@@ -50,8 +50,155 @@ angs_artifacts = extract_angles(C_artifacts, basis_ref, SSI_top_PCs);
 % 3D Principal Angles Scatter Plot
 plot_3d_angles(angs_before, angs_after, angs_artifacts);
 
+<<<<<<< Updated upstream
 end
 
+=======
+%% ── 3. Epoch power  (log10 of trace) ────────────────────────────────────
+lpow_before    = 10 * log10(extract_power(C_before));
+lpow_after     = 10 * log10(extract_power(C_after));
+pow_art        = extract_power(C_artifacts);
+valid_art      = pow_art > eps;
+ssi_artifacts  = ssi_artifacts(valid_art);
+lpow_artifacts = 10 * log10(pow_art(valid_art));
+
+% Ideal Target: 100% Subspace Alignment at current signal power
+ideal_power_target = median(lpow_after);
+
+%% ── 4. 2D LDA on [SSI, log-power] ──────────────────────────────────────
+X_lda = [ssi_after(:),     lpow_after(:); ...
+         ssi_artifacts(:), lpow_artifacts(:)];
+Y_lda = [ones(numel(ssi_after), 1); zeros(numel(ssi_artifacts), 1)];
+try
+    lda_mdl      = fitcdiscr(X_lda, Y_lda, 'CrossVal', 'on', 'KFold', 5);
+    lda_accuracy = (1 - kfoldLoss(lda_mdl)) * 100;
+catch
+    lda_accuracy = NaN;
+end
+
+%% ── 5. Plot ──────────────────────────────────────────────────────────────
+figure('Name', 'GEDAI SENSAI Analysis', 'Color', 'w', ...
+       'Position', [80 100 1200 520]);
+
+% Colour palette
+col_sig  = [0.08 0.72 0.22];
+col_noise= [0.85 0.13 0.13];
+col_bef  = [0.30 0.45 0.75];
+col_star = [1.00 0.88 0.00];
+
+% ── Panel 1: Before GEDAI ────────────────────────────────────────────────
+ax1 = subplot(1, 2, 1);
+hold(ax1, 'on');
+
+% Sort so high-SSI points render on top
+[~, si] = sort(ssi_before, 'ascend');
+scatter(ax1, lpow_before(si), ssi_before(si), 38, ssi_before(si), ...
+        'filled', 'MarkerEdgeColor', 'none', 'MarkerFaceAlpha', 0.75);
+
+% Ideal alignment horizon
+yline(ax1, 1, '--', 'Color', col_star, 'LineWidth', 1.5, 'Alpha', 0.6);
+draw_ellipse(ax1, lpow_before, ssi_before, col_bef, 0.95);
+
+colormap(ax1, parula);
+cb = colorbar(ax1, 'eastoutside');
+cb.Label.String = 'SSI composite';  cb.Label.FontSize = 10;
+clim(ax1, [0 1]);
+
+xlabel(ax1, 'Epoch Power (dB)',                'FontSize', 11);
+ylabel(ax1, 'SSI  (geom. mean of top-3 PC cosines)', 'FontSize', 11);
+title(ax1, sprintf('Before GEDAI\nn = %d epochs (50%% overlapping)  |  Mean SSI = %.3f', ...
+      numel(ssi_before), mean(ssi_before)), 'FontSize', 11);
+ylim(ax1, [-0.05 1.15]);
+grid(ax1, 'on');  ax1.GridAlpha = 0.20;
+text(ax1, ideal_power_target, 1.08, 'Ideal Subspace Alignment', 'FontSize', 9, 'Color', 0.4*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+
+% ── Panel 2: After GEDAI  (Signal vs Noise) ──────────────────────────────
+ax2 = subplot(1, 2, 2);
+hold(ax2, 'on');
+
+h_noise = scatter(ax2, lpow_artifacts, ssi_artifacts, 38, col_noise, ...
+                  'filled', 'MarkerEdgeColor', 'none', 'MarkerFaceAlpha', 0.50);
+h_sig   = scatter(ax2, lpow_after,     ssi_after,     38, col_sig, ...
+                  'filled', 'MarkerEdgeColor', 'none', 'MarkerFaceAlpha', 0.70);
+
+% Ideal alignment horizon and dataset-specific target star
+yline(ax2, 1, '--', 'Color', col_star, 'LineWidth', 1.5, 'Alpha', 0.6);
+h_star = scatter(ax2, ideal_power_target, 1, 250, col_star, 'p', 'filled', ...
+                  'MarkerEdgeColor', 'k', 'LineWidth', 1.0);
+
+% 95% confidence ellipses
+draw_ellipse(ax2, lpow_after,     ssi_after,     col_sig,   0.95);
+if numel(lpow_artifacts) > 2
+    draw_ellipse(ax2, lpow_artifacts, ssi_artifacts, col_noise, 0.95);
+end
+
+% Calculate Visual Silhouette using min-max normalized axes
+if isempty(lpow_artifacts)
+
+    s_i_br = 0;
+else
+    p_min = min([lpow_after; lpow_artifacts]);
+    p_max = max([lpow_after; lpow_artifacts]);
+    p_range = max(1e-6, p_max - p_min);
+
+    X_sig_br = [ssi_after, (lpow_after - p_min) / p_range];
+    X_noise_br = [ssi_artifacts, (lpow_artifacts - p_min) / p_range];
+
+    D_sig_br = sqrt(max(0, bsxfun(@plus, sum(X_sig_br.^2, 2), sum(X_sig_br.^2, 2)') - 2*(X_sig_br*X_sig_br')));
+    a_i_br = (sum(D_sig_br, 2)) ./ max(1, numel(ssi_after) - 1);
+
+    D_bg_br = sqrt(max(0, bsxfun(@plus, sum(X_sig_br.^2, 2), sum(X_noise_br.^2, 2)') - 2*(X_sig_br*X_noise_br')));
+    b_i_br = mean(D_bg_br, 2);
+
+    s_i_br = mean((b_i_br - a_i_br) ./ max(a_i_br, b_i_br));
+end
+if ~isnan(lda_accuracy)
+    ttl = sprintf('After GEDAI  |  2D LDA accuracy: %.1f%%\nMean SSSI: %.3f   |   Mean NSSI: %.3f   |   Sil: %.2f', ...
+                  lda_accuracy, mean(ssi_after), mean(ssi_artifacts), s_i_br);
+else
+    ttl = sprintf('After GEDAI\nMean SSSI: %.3f   |   Mean NSSI: %.3f   |   Sil: %.2f', ...
+                  mean(ssi_after), mean(ssi_artifacts), s_i_br);
+end
+title(ax2, ttl, 'FontSize', 11);
+
+xlabel(ax2, 'Epoch Power (dB)',                'FontSize', 11);
+ylabel(ax2, 'SSI  (geom. mean of top-3 PC cosines)', 'FontSize', 11);
+legend(ax2, [h_star, h_sig, h_noise], ...
+       {'Target Subspace', ...
+        sprintf('Signal  (mean SSI=%.3f)', mean(ssi_after)), ...
+        sprintf('Noise   (mean SSI=%.3f)', mean(ssi_artifacts))}, ...
+       'Location', 'best', 'FontSize', 9);
+ylim(ax2, [-0.05 1.15]);
+grid(ax2, 'on');  ax2.GridAlpha = 0.20;
+text(ax2, ideal_power_target, 1.08, 'Target Subspace', 'FontSize', 9, 'Color', 0.4*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+
+% ── Match X-axis range (power): must include the full width of all 95% ellipses ──
+% The horizontal extents of a 2D confidence ellipse are at MeanX +/- sqrt(VarX * Chi2)
+chi2_95 = -2 * log(1 - 0.95);
+get_extents = @(x) [mean(x) - sqrt(var(x)*chi2_95), mean(x) + sqrt(var(x)*chi2_95)];
+
+ext_b = get_extents(lpow_before);
+ext_a = get_extents(lpow_after);
+ext_n = get_extents(lpow_artifacts);
+
+% Union of all points and all ellipse extents
+all_vals = [lpow_before; lpow_after; lpow_artifacts; ext_b'; ext_a'; ext_n'];
+x_min = min(all_vals);
+x_max = max(all_vals);
+x_pad = 0.10 * (x_max - x_min);
+
+x_lims = [x_min - x_pad, x_max + x_pad];
+xlim(ax1, x_lims);
+xlim(ax2, x_lims);
+
+% ── Shared super-title ────────────────────────────────────────────────────
+sgtitle('SENSAI visualization:  Subspace Similarity  vs  Epoch Power', ...
+        'FontSize', 13, 'FontWeight', 'bold');
+end
+
+
+%% ══════════════════════════════════════════════════════════════════════════
+>>>>>>> Stashed changes
 function angs = extract_angles(C_array, basis_ref, top_PCs)
     num_emp = length(C_array);
     angs = zeros(num_emp, top_PCs);
