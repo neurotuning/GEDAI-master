@@ -20,6 +20,10 @@ num_bands = 9;
 wavelet_type = 'haar';
 
 %% Bayesian optimisation ---------------------------------------------------
+if use_parallel
+    gcp(); % Ensure parallel pool is open
+end
+
 objective_fn = @(p) eval_full_pipeline(p.threshold, eeg_data, srate, chanlocs, refCOV, ...
     epoch_size_in_cycles, lowcut_frequency, signal_type, broadband_epoch_size, num_bands, wavelet_type);
 
