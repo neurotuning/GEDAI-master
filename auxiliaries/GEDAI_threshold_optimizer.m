@@ -2,7 +2,7 @@
 % PolyForm Noncommercial License 1.0.0
 % Copyright (C) [2025] Tomas Ros & Abele Michela — NeuroTuning Lab
 
-function [optimal_threshold, optimization_results] = GEDAI_threshold_optimizer(eeg_data, srate, chanlocs, refCOV, epoch_size_in_cycles, lowcut_frequency, signal_type, n_evals, use_parallel)
+function [optimal_threshold, optimization_results] = GEDAI_threshold_optimizer(eeg_data, srate, chanlocs, refCOV, epoch_size_in_cycles, lowcut_frequency, signal_type, n_evals, use_parallel, visualize)
 % GEDAI_THRESHOLD_OPTIMIZER  Bayesian optimisation of the FULL GEDAI pipeline.
 %
 %   Optimises the threshold [0, 10] by running the entire multi-band 
@@ -11,11 +11,12 @@ function [optimal_threshold, optimization_results] = GEDAI_threshold_optimizer(e
 if nargin < 5 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
 if nargin < 6 || isempty(lowcut_frequency),     lowcut_frequency = 0.5; end
 if nargin < 7 || isempty(signal_type),          signal_type = 'eeg'; end
-if nargin < 8 || isempty(n_evals),              n_evals = 30; end
+if nargin < 8 || isempty(n_evals),              n_evals = 15; end
 if nargin < 9 || isempty(use_parallel),         use_parallel = false; end
+if nargin < 10 || isempty(visualize),           visualize = true; end
 
 % Fixed pipeline parameters (must match GEDAI.m)
-broadband_epoch_size = 2; 
+broadband_epoch_size = 1; 
 num_bands = 9;
 wavelet_type = 'haar';
 
@@ -23,13 +24,16 @@ wavelet_type = 'haar';
 objective_fn = @(p) eval_full_pipeline(p.threshold, eeg_data, srate, chanlocs, refCOV, ...
     epoch_size_in_cycles, lowcut_frequency, signal_type, broadband_epoch_size, num_bands, wavelet_type);
 
+plot_fcn = {};
+if visualize, plot_fcn = @plotObjectiveModel; end
+
 bo_results = bayesopt(objective_fn, ...
     optimizableVariable('threshold', [0, 10], 'Type', 'real'), ...
     'MaxObjectiveEvaluations',  n_evals, ...
     'UseParallel',              false, ...
     'IsObjectiveDeterministic', false, ...
     'Verbose',                  0, ...
-    'PlotFcn',                  @plotObjectiveModel, ...
+    'PlotFcn',                  plot_fcn, ...
     'OutputFcn',                @assignInBase, ...
     'SaveVariableName',         'GEDAI_bayesian_optimization');
 
@@ -89,7 +93,8 @@ try
     % 3. Scoring
     artifacts = eeg_data - reconstructed;
     % Use bb_epoch_size for final scoring consistency
-    score = SENSAI_basic(reconstructed, artifacts, srate, bb_epoch_size, refCOV, 1, signal_type);
+    noise_multiplier=2; % For broadband components, apply lower weight (default=2) to noise variance for SENSAI scoring
+    score = SENSAI_basic(reconstructed, artifacts, srate, bb_epoch_size, refCOV, noise_multiplier, signal_type);
     
     if isnan(score) || ~isfinite(score), neg_score = 0; else, neg_score = -score; end
     

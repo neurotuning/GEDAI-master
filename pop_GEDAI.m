@@ -21,7 +21,7 @@ artifact_threshold = 'auto';
 epoch_size_in_cycles = 12;
 lowcut_frequency = 0.5;
 ENOVA_threshold = 0.9;
-n_bayesian_evals = 30;
+n_bayesian_evals = 15;
 
 % Create an inputParser to handle varargin
 p = inputParser;
@@ -72,7 +72,7 @@ visualize_artifacts = logical(out.visualization_A);
 visualize_manifold  = logical(out.visualize_manifold);
 n_bayesian_evals    = str2double(out.n_bayesian_evals);
 if isnan(n_bayesian_evals) || n_bayesian_evals < 5
-    n_bayesian_evals = 30;
+    n_bayesian_evals = 15;
 end
 
 [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold, [], visualize_manifold, n_bayesian_evals);
