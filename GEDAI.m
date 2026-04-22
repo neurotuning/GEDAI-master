@@ -83,7 +83,7 @@
 % 
 %   com                     - output logging to EEG.history
 
-% [Generalized Eigenvalue De-Artifacting Intrument (GEDAI) v 1.6]
+% [Generalized Eigenvalue De-Artifacting Instrument (GEDAI) v 1.6]
 % PolyForm Noncommercial License 1.0.0
 % https://polyformproject.org/licenses/noncommercial/1.0.0
 %
@@ -96,7 +96,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_manifold)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_manifold, n_bayesian_evals)
 
 if nargin < 2 || isempty(artifact_threshold_type)
     artifact_threshold_type = 'auto';
@@ -124,6 +124,9 @@ if nargin < 9 || isempty(signal_type)
 end
 if nargin < 10 || isempty(visualize_manifold)
     visualize_manifold = false;
+end
+if nargin < 11 || isempty(n_bayesian_evals)
+    n_bayesian_evals = 30;  % Default number of Bayesian evaluations
 end
 % Validate signal_type
 if ~ismember(lower(signal_type), {'eeg', 'meg'})
@@ -323,11 +326,40 @@ clear mra_hp
 
     % ------------------ GEDAI ------------------------------
 
+    %% ── Bayesian outer-loop threshold optimisation (optional) ──────────────
+    % When artifact_threshold_type == 'bayesian', we search the [0,10] range
+    % for the numeric threshold that maximises 2D LDA separability (signal
+    % vs noise in SSI × power space) on the broadband data, BEFORE running
+    % the full multi-band denoising pipeline.
+    if ischar(artifact_threshold_type) && strcmpi(artifact_threshold_type, 'bayesian')
+        disp([newline '=== Bayesian Threshold Optimisation ===' newline ...
+              'Searching threshold ∈ [0, 10] to maximise FULL PIPELINE SSSI-NSSI...' newline ...
+              'NOTE: This evaluates the full reconstruction for each iteration.' newline ...
+              '(n_evals = ' num2str(n_bayesian_evals) ')']);
+
+        [bayesian_optimal_threshold, bayesian_opt_results] = GEDAI_threshold_optimizer( ...
+            double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, refCOV, ...
+            epoch_size_in_cycles, lowcut_frequency, signal_type, n_bayesian_evals, parallel);
+
+        fprintf('[BayesOpt] Optimal threshold = %.2f  (SSSI-NSSI = %.1f%%)\n', ...
+                bayesian_optimal_threshold, bayesian_opt_results.best_sssi_nssi_score);
+
+        % Replace string mode with the found numeric threshold for all bands
+        artifact_threshold_type = bayesian_optimal_threshold;
+
+        % Store optimisation results for later retrieval
+        bayesian_results_store = bayesian_opt_results;
+    end
+
     disp([newline 'SENSAI threshold detection...please wait']);
     broadband_optimization_type = 'parabolic';
     broadband_artifact_threshold_type = 'auto-';
     broadband_minThreshold = 0;
     broadband_maxThreshold = 12;
+    % If a numeric threshold was found by Bayesian optimisation, use it directly for broadband
+    if isnumeric(artifact_threshold_type)
+        broadband_artifact_threshold_type = artifact_threshold_type;
+    end
     [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold);
     SENSAI_score_per_band = broadband_sensai;
     artifact_threshold_per_band = broadband_thresh;
@@ -789,6 +821,10 @@ EEGclean.etc.GEDAI.ENOVA_per_epoch = ENOVA_per_epoch;
 EEGclean.etc.GEDAI.epochs_rejected = num_rejected;
 EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
+% Store Bayesian optimisation results if available
+if exist('bayesian_results_store', 'var')
+    EEGclean.etc.GEDAI.bayesian_optimization = bayesian_results_store;
+end
 if exist('samples_to_keep', 'var')
     EEGclean.etc.GEDAI.samples_to_keep = samples_to_keep;
 else

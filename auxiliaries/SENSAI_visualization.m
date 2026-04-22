@@ -168,12 +168,45 @@ h_star = scatter(ax2, ideal_power_target, 1, 250, col_star, 'p', 'filled', ...
 draw_ellipse(ax2, lpow_after,     ssi_after,     col_sig,   0.95);
 draw_ellipse(ax2, lpow_artifacts, ssi_artifacts, col_noise, 0.95);
 
+% ── 5.1 LDA Posterior Background (Creative Contour) ───────────────────────
+if ~isnan(lda_accuracy) && exist('lda_mdl', 'var')
+    % Create meshgrid for current limits
+    xl = xlim(ax2); yl = ylim(ax2);
+    nx = 100; ny = 100;
+    [XG, YG] = meshgrid(linspace(xl(1), xl(2), nx), linspace(yl(1), yl(2), ny));
+    
+    % Prepare for prediction (must match model features: [SSI, Power])
+    % Note: model was trained on [SSI, Power], so we use [YG(:), XG(:)] 
+    % Wait, X_lda was [ssi_after, lpow_after] so feature 1=SSI, 2=Power.
+    % In plot: X=Power, Y=SSI. So prediction input is [YG(:), XG(:)].
+    try
+        % Extract the trained discriminant model from CrossVal (first fold)
+        mdl_for_bg = lda_mdl.Trained{1}; 
+        [~, Post] = predict(mdl_for_bg, [YG(:), XG(:)]);
+        
+        % Probability of class 1 (Signal)
+        ProbSig = reshape(Post(:, 2), ny, nx);
+        
+        % Create custom diverging colormap (Red -> Grey -> Green)
+        cpoints = [0.85 0.13 0.13; 0.98 0.98 0.98; 0.08 0.72 0.22];
+        interp_cmap = [linspace(cpoints(1,1), cpoints(2,1), 64)', linspace(cpoints(1,2), cpoints(2,2), 64)', linspace(cpoints(1,3), cpoints(2,3), 64)'; ...
+                       linspace(cpoints(2,1), cpoints(3,1), 64)', linspace(cpoints(2,2), cpoints(3,2), 64)', linspace(cpoints(2,3), cpoints(3,3), 64)'];
+
+        % Draw filled contours
+        [~, h_cont] = contourf(ax2, XG, YG, ProbSig, linspace(0, 1, 15), 'LineColor', 'none', 'FaceAlpha', 0.15);
+        colormap(ax2, interp_cmap);
+        uistack(h_cont, 'bottom');
+    catch
+    end
+end
+
+ssi_diff = (mean(ssi_after) - mean(ssi_artifacts)) * 100;
 if ~isnan(lda_accuracy)
-    ttl = sprintf('After Denoising  |  2D LDA accuracy: %.1f%%\nMean SSSI: %.2f   |   Mean NSSI: %.2f', ...
-                  lda_accuracy, mean(ssi_after), mean(ssi_artifacts));
+    ttl = sprintf('After Denoising  |  LDA: %.1f%%  |  SSSI-NSSI: %.1f%%\nMean SSSI: %.2f   |   Mean NSSI: %.2f', ...
+                  lda_accuracy, ssi_diff, mean(ssi_after), mean(ssi_artifacts));
 else
-    ttl = sprintf('After Denoising\nMean SSSI: %.2f   |   Mean NSSI: %.2f', ...
-                  mean(ssi_after), mean(ssi_artifacts));
+    ttl = sprintf('After Denoising  |  SSSI-NSSI: %.1f%%\nMean SSSI: %.2f   |   Mean NSSI: %.2f', ...
+                  ssi_diff, mean(ssi_after), mean(ssi_artifacts));
 end
 title(ax2, ttl, 'FontSize', 11);
 
@@ -216,6 +249,7 @@ metrics = struct();
 metrics.ssi_before_mean = mean(ssi_before);
 metrics.ssi_after_mean  = mean(ssi_after);
 metrics.ssi_artifacts_mean = mean(ssi_artifacts);
+metrics.ssi_nssi_diff   = (mean(ssi_after) - mean(ssi_artifacts)) * 100;
 metrics.lda_accuracy    = lda_accuracy;
 metrics.ideal_power_target_db = ideal_power_target;
 
