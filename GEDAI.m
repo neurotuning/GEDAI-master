@@ -126,7 +126,7 @@ if nargin < 10 || isempty(visualize_manifold)
     visualize_manifold = false;
 end
 if nargin < 11 || isempty(n_bayesian_evals)
-    n_bayesian_evals = 30;  % Default number of Bayesian evaluations
+    n_bayesian_evals = 15;  % Default number of Bayesian evaluations
 end
 % Validate signal_type
 if ~ismember(lower(signal_type), {'eeg', 'meg'})
