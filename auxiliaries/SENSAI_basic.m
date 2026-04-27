@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [SENSAI_score, SIGNAL_subspace_similarity, NOISE_subspace_similarity, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(signal_data, noise_data, srate, epoch_size, refCOV, NOISE_multiplier, signal_type)
+function [SENSAI_score, SIGNAL_subspace_similarity, NOISE_subspace_similarity, mean_ENOVA, ENOVA_per_epoch, signal_silhouette, SENSAI_normalized] = SENSAI_basic(signal_data, noise_data, srate, epoch_size, refCOV, NOISE_multiplier, signal_type)
 
     %   Calculates the Signal & Noise Subspace Alignment Index (SENSAI) from raw EEG data
     
@@ -80,5 +80,40 @@ end
 mean_ENOVA = mean(ENOVA_per_epoch);
 SIGNAL_subspace_similarity = 100 * mean(SIGNAL_subspace_similarity_distribution);
 NOISE_subspace_similarity = 100 * mean(NOISE_subspace_similarity_distribution);
+
+% --- Point-to-Centroid Normalized SENSAI ---
+% Middle ground: accounts for individual point spreads relative to cluster centers.
+% Bounded [-1, 1], but usually > 0 for successful denoising.
+mu_sig = mean(SIGNAL_subspace_similarity_distribution);
+mu_noise = mean(NOISE_subspace_similarity_distribution);
+epsilon = 1e-6; % Avoid division by zero
+
+% Distances of signal points to both centroids
+a_sig = abs(SIGNAL_subspace_similarity_distribution - mu_sig);
+b_sig = abs(SIGNAL_subspace_similarity_distribution - mu_noise);
+% Silhouette per signal point
+s_sig = (b_sig - a_sig) ./ max(max(a_sig, b_sig), epsilon);
+
+% Distances of noise points to both centroids
+a_noise = abs(NOISE_subspace_similarity_distribution - mu_noise);
+b_noise = abs(NOISE_subspace_similarity_distribution - mu_sig);
+% Silhouette per noise point
+s_noise = (b_noise - a_noise) ./ max(max(a_noise, b_noise), epsilon);
+
+% Final Normalized Score: Mean silhouette of the Signal cluster
+% (Scaled to 0-1 range for consistency, where 0.5 is neutral)
+SENSAI_normalized = 0.5 * (mean(s_sig) + 1);
+
+% --- Signal Silhouette Score ---
+% Only sensitive to the SSI separation (Y-axis in the visualization)
+X_sil = [SIGNAL_subspace_similarity_distribution'; NOISE_subspace_similarity_distribution'];
+Y_sil = [ones(numel(SIGNAL_subspace_similarity_distribution), 1); zeros(numel(NOISE_subspace_similarity_distribution), 1)];
+try
+    sil_scores = silhouette(X_sil, Y_sil, 'sqEuclidean');
+    signal_silhouette = mean(sil_scores(Y_sil == 1));
+catch
+    signal_silhouette = NaN;
+end
+
 SENSAI_score = SIGNAL_subspace_similarity - NOISE_multiplier * NOISE_subspace_similarity;
 end

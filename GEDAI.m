@@ -98,7 +98,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_manifold)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, signal_silhouette, SENSAI_normalized]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold, signal_type, visualize_manifold)
 
 if nargin < 2 || isempty(artifact_threshold_type)
     artifact_threshold_type = 'auto';
@@ -590,7 +590,7 @@ EEGartifacts.data = EEGavRef.data(:, 1:size(EEGclean.data, 2)) - EEGclean.data;
 
 % Calculate composite SENSAI score for epoch rejection
 noise_multiplier = 1;
-[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, broadband_epoch_size, refCOV, noise_multiplier, signal_type);
+[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch, signal_silhouette, SENSAI_normalized] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, broadband_epoch_size, refCOV, noise_multiplier, signal_type);
 
 % Store original epoch count for rejection statistics
 original_total_epochs = length(ENOVA_per_epoch);
@@ -742,7 +742,7 @@ end
 
 % Calculate final SENSAI score (after potential epoch rejection)
 
-[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, broadband_epoch_size, refCOV, noise_multiplier, signal_type);
+[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch, signal_silhouette, SENSAI_normalized] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, broadband_epoch_size, refCOV, noise_multiplier, signal_type);
 
 % disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
 % disp(['Mean ENOVA: ' num2str(round(mean_ENOVA, 2, 'significant'))]);
@@ -805,12 +805,16 @@ end
 disp(' ');
 
 disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
+disp(['Normalized SENSAI: ' num2str(round(SENSAI_normalized, 2, 'significant'))]);
+disp(['Signal Silhouette score: ' num2str(round(signal_silhouette, 2, 'significant'))]);
 disp(['Mean ENOVA: ' num2str(round(mean_ENOVA*100, 2, 'significant')) ' %']);
 disp(['Bad epochs rejected: ' num2str(round(percentage_rejected,1)) ' % (' num2str(num_rejected) ' out of ' num2str(original_total_epochs) ' epochs)']);
 disp(['Elapsed time: ' num2str(round(tEnd, 2, 'significant')) ' seconds' newline]);
 
 % Store GEDAI variables in EEG.etc.GEDAI
 EEGclean.etc.GEDAI.SENSAI_score = SENSAI_score;
+EEGclean.etc.GEDAI.SENSAI_normalized = SENSAI_normalized;
+EEGclean.etc.GEDAI.signal_silhouette = signal_silhouette;
 EEGclean.etc.GEDAI.SENSAI_score_per_band = SENSAI_score_per_band;
 EEGclean.etc.GEDAI.artifact_threshold_per_band = artifact_threshold_per_band;
 EEGclean.etc.GEDAI.mean_ENOVA = mean_ENOVA;
@@ -874,7 +878,7 @@ end
         % Reconstruct and score
         EEGclean_obj_data = cl_wv_obj;
         EEGartifacts_obj_data = EEGavRef.data(:, 1:size(EEGclean_obj_data, 2)) - EEGclean_obj_data;
-        [sc_obj, ~, ~, ~, ~] = SENSAI_basic(double(EEGclean_obj_data), double(EEGartifacts_obj_data), srate, broadband_epoch_size, refCOV, 1, signal_type);
+        [sc_obj, ~, ~, ~, ~, ~, ~] = SENSAI_basic(double(EEGclean_obj_data), double(EEGartifacts_obj_data), srate, broadband_epoch_size, refCOV, 1, signal_type);
         neg_score = -sc_obj;
     end
 end
