@@ -26,7 +26,7 @@
 %                                 "auto-", "auto" or "auto+". 
 %                                 Default is "auto". Can also be provided as 
 %                                 a numeric value representing the artifacting strength, with range [0 10]
-%                                 or "optimize" to automatically find the best strength.
+%                                 or "bayesopt" to use Bayesian Optimization to maximise the SENSAI denoising score (slower but more accurate).
 %                             
 %   epoch_size_in_cycles        - Epoch size in number of wave cycles for each
 %                                 wavelet band. Default is 12.
@@ -429,25 +429,30 @@ end
 [num_samples, num_channels] = size(unfiltered_data);
 
 % --- Optional: Optimization of artifact_threshold_type ---
-if ischar(artifact_threshold_type) && strcmpi(artifact_threshold_type, 'optimize')
-    disp([newline 'Optimizing artifact_threshold_type (strength) by maximizing final SENSAI score...']);
+if ischar(artifact_threshold_type) && strcmpi(artifact_threshold_type, 'bayesopt')
+    disp([newline 'Bayesian Optimization of SENSAI score...']);
     
     try
         % 1. Attempt Bayesian Optimization
         vars = optimizableVariable('strength', [0, 10]);
+        InitialPoints = table(7, 'VariableNames', {'strength'});
         results = bayesopt(@gedai_outer_objective, vars, ...
-            'MaxObjectiveEvaluations', 15, ... % Sufficient for 1D search
-            'NumSeedPoints', 5, ...
+            'InitialX', InitialPoints, ...
+            'MaxObjectiveEvaluations', 10, ... % Sufficient for 1D search
+            'NumSeedPoints', 3, ... 
             'PlotFcn', {@plotObjectiveModel}, ... 
             'Verbose', 0);
         artifact_threshold_type = results.XAtMinObjective.strength;
+        
     catch
         % 2. Fallback to Brent's method (local_fminbnd)
-        disp('Bayesian Optimization toolbox not available. Falling back to local_fminbnd...');
+        disp([newline 'Fallback to Golden Section Optimization of SENSAI score...']);
         [artifact_threshold_type, ~] = local_fminbnd(@(v) gedai_outer_objective(v), 0, 10, 0.2);
     end
     disp(['Optimal artifact_threshold_strength: ' num2str(artifact_threshold_type) newline]);
+    
 end
+close
 
 % MEMORY OPTIMIZED: Use 2D accumulator with correct type
 % Pre-allocate with same precision as input data
