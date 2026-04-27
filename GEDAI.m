@@ -450,9 +450,10 @@ if ischar(artifact_threshold_type) && strcmpi(artifact_threshold_type, 'bayesopt
         [artifact_threshold_type, ~] = local_fminbnd(@(v) gedai_outer_objective(v), 0, 10, 0.2);
     end
     disp(['Optimal artifact_threshold_strength: ' num2str(artifact_threshold_type) newline]);
+    close
     
 end
-close
+
 
 % MEMORY OPTIMIZED: Use 2D accumulator with correct type
 % Pre-allocate with same precision as input data
