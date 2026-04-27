@@ -87,7 +87,7 @@ try
     
     % --- Signal Silhouette Score ---
     % User preference: Only sensitive to the Y-axis (SSI) separation.
-    sil_scores   = silhouette(X_lda(:, 1), Y_lda, 'sqEuclidean');
+    sil_scores   = silhouette(X_lda(:, 1), Y_lda, 'Euclidean');
     sil_signal   = mean(sil_scores(Y_lda == 1));
 catch
     lda_accuracy = NaN;
