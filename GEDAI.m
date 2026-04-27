@@ -24,7 +24,9 @@
 %                                 ("auto-") might retain more signal at the 
 %                                 expense of noise. Possible levels:
 %                                 "auto-", "auto" or "auto+". 
-%                                 Default is "auto".
+%                                 Default is "auto". Can also be provided as 
+%                                 a numeric value representing the artifacting strength, with range [0 10]
+%                                 or "optimize" to automatically find the best strength.
 %                             
 %   epoch_size_in_cycles        - Epoch size in number of wave cycles for each
 %                                 wavelet band. Default is 12.
@@ -35,7 +37,7 @@
 %   ref_matrix_type             - Matrix used as a reference for deartifacting.
 %
 %                                  The default "precomputed" uses a BEM leadfield for
-%                                  standard electrode locations precomputed through 
+%                                  standard EEG electrode locations precomputed with 
 %                                  OPENMEEG (343 electrodes) based on 10-5 system. 
 %
 %                                 "interpolated" uses the precomputed leadfield and 
@@ -425,6 +427,27 @@ end
 %% Denoise each wavelet band
 % MEMORY OPTIMIZED: Get dimensions from unfiltered data
 [num_samples, num_channels] = size(unfiltered_data);
+
+% --- Optional: Optimization of artifact_threshold_type ---
+if ischar(artifact_threshold_type) && strcmpi(artifact_threshold_type, 'optimize')
+    disp([newline 'Optimizing artifact_threshold_type (strength) by maximizing final SENSAI score...']);
+    
+    try
+        % 1. Attempt Bayesian Optimization
+        vars = optimizableVariable('strength', [0, 10]);
+        results = bayesopt(@gedai_outer_objective, vars, ...
+            'MaxObjectiveEvaluations', 15, ... % Sufficient for 1D search
+            'NumSeedPoints', 5, ...
+            'PlotFcn', {@plotObjectiveModel}, ... 
+            'Verbose', 0);
+        artifact_threshold_type = results.XAtMinObjective.strength;
+    catch
+        % 2. Fallback to Brent's method (local_fminbnd)
+        disp('Bayesian Optimization toolbox not available. Falling back to local_fminbnd...');
+        [artifact_threshold_type, ~] = local_fminbnd(@(v) gedai_outer_objective(v), 0, 10, 0.2);
+    end
+    disp(['Optimal artifact_threshold_strength: ' num2str(artifact_threshold_type) newline]);
+end
 
 % MEMORY OPTIMIZED: Use 2D accumulator with correct type
 % Pre-allocate with same precision as input data
@@ -816,4 +839,36 @@ end
 if exist('eegh', 'file')
     EEGclean = eegh(com, EEGclean);
 end
+
+    function neg_score = gedai_outer_objective(tbl)
+        if istable(tbl), str_val = tbl.strength; else, str_val = tbl; end
+        
+        % Denoise wavelet bands with current strength
+        cl_wv_obj = zeros(num_channels, num_samples, 'like', unfiltered_data);
+        if parallel
+            parfor f_obj = 1:num_bands_to_process
+                wv_band_obj = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f_obj)';
+                ep_sz_obj = epoch_sizes_per_wavelet_band(f_obj);
+                cf_obj = center_frequencies(f_obj);
+                mt_obj = 0; if (cf_obj >= 7 && cf_obj <= 13), mt_obj = -6; end
+                [cl_b_obj, ~, ~, ~, ~] = GEDAI_per_band(double(wv_band_obj), srate, EEGavRef.chanlocs, str_val, ep_sz_obj, refCOV, 'parabolic', false, signal_type, mt_obj);
+                cl_wv_obj = cl_wv_obj + cl_b_obj;
+            end
+        else
+            for f_obj = 1:num_bands_to_process
+                wv_band_obj = modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f_obj)';
+                ep_sz_obj = epoch_sizes_per_wavelet_band(f_obj);
+                cf_obj = center_frequencies(f_obj);
+                mt_obj = 0; if (cf_obj >= 7 && cf_obj <= 13), mt_obj = -6; end
+                [cl_b_obj, ~, ~, ~, ~] = GEDAI_per_band(double(wv_band_obj), srate, EEGavRef.chanlocs, str_val, ep_sz_obj, refCOV, 'parabolic', false, signal_type, mt_obj);
+                cl_wv_obj = cl_wv_obj + cl_b_obj;
+            end
+        end
+        
+        % Reconstruct and score
+        EEGclean_obj_data = cl_wv_obj;
+        EEGartifacts_obj_data = EEGavRef.data(:, 1:size(EEGclean_obj_data, 2)) - EEGclean_obj_data;
+        [sc_obj, ~, ~, ~, ~] = SENSAI_basic(double(EEGclean_obj_data), double(EEGartifacts_obj_data), srate, broadband_epoch_size, refCOV, 1, signal_type);
+        neg_score = -sc_obj;
+    end
 end
