@@ -186,6 +186,17 @@ else
     error('GEDAI_empirical: Data length is too short for a single 1s epoch.');
 end
 
+% Filter data in alpha band (9-13 Hz) for GFP calculation
+disp('GEDAI_empirical: Filtering data in alpha band (9-13 Hz) for GFP calculation...');
+try
+    EEGalpha = pop_eegfiltnew(EEGemp, 'locutoff', 9, 'hicutoff', 13);
+    alpha_data = EEGalpha.data;
+catch
+    warning('GEDAI_empirical: Could not filter in alpha band using pop_eegfiltnew. Using broadband data for GFP.');
+    alpha_data = EEGemp.data;
+end
+data_epoched_alpha = reshape(alpha_data(:, 1:num_samples_to_take), [size(alpha_data,1), samples_per_epoch, n_epochs]);
+
 SSI = -inf(1, n_epochs);
 mean_GFP = -inf(1, n_epochs);
 epoch_covs = cell(1, n_epochs);
@@ -205,14 +216,15 @@ for e = 1:n_epochs
     % Only process epochs that passed the Phase 0 sanity-check (using resampled mask)
     if hq_mask_resampled(e)
         ep_data = data_epoched(:,:,e);
-        c_ep = cov(ep_data');
+        ep_data_alpha = data_epoched_alpha(:,:,e);
+        c_ep = cov(ep_data_alpha');
         epoch_covs{e} = c_ep;
         [V, D] = eig(c_ep);
         [~, s_idx] = sort(diag(D), 'descend');
         basis_ep = V(:, s_idx(1:3));
         cos_val = subspace_angles(basis_ep, basis_ref);
         SSI(e) = prod(cos_val);
-        mean_GFP(e) = mean(std(ep_data, 1));
+        mean_GFP(e) = mean(std(ep_data_alpha, 1));
     end
 end
 
@@ -292,7 +304,7 @@ if visualize_artifacts && ~ischar(empiricalLogMeanCOV)
         legend('All Epochs (Color=Score)');
     end
     xlabel('Subspace Similarity Index (SSI)');
-    ylabel('Global Field Power (GFP)');
+    ylabel('Global Field Power (GFP, Alpha 9-13 Hz)');
     title('GEDAI High-Fidelity Epoch Selection');
     grid on;
     c = colorbar;
