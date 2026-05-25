@@ -738,7 +738,7 @@ if parallel
             % Determine minThreshold based on signal type and frequency
             current_center_freq = center_frequencies(f);
             current_minThreshold = 0;
-            if (current_center_freq >= 0.8 && current_center_freq <= 60)
+            if (current_center_freq >= 0.5 && current_center_freq <= 60)
                 current_minThreshold = -6;
             end
 
