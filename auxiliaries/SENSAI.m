@@ -76,14 +76,6 @@ SIGNAL_subspace_similarity = 100 * mean(SIGNAL_subspace_similarity_distribution)
 NOISE_subspace_similarity = 100 * mean(NOISE_subspace_similarity_distribution);
 
 % 2. Calculate the raw absolute objective
-raw_diff = SIGNAL_subspace_similarity - (noise_multiplier * NOISE_subspace_similarity);
+SENSAI_score = SIGNAL_subspace_similarity - (noise_multiplier * NOISE_subspace_similarity);
 
-% 3. Calculate epoch-by-epoch standard deviation ONLY for the signal subspace
-% We use std() instead of var() to keep the denominator in the same linear unit 
-% scale as the original Cohen's d / Option 1 approach.
-std_SIGNAL = 100 * std(SIGNAL_subspace_similarity_distribution);
-
-% 4. New SENSAI Score
-epsilon = 1e-6; % Prevent division by zero if the signal is perfectly stable
-SENSAI_score = (raw_diff * abs(raw_diff)) / (std_SIGNAL + epsilon);
 end
