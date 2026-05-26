@@ -48,34 +48,37 @@ num_epochs = size(cov_signal_epoched, 3);
 SIGNAL_subspace_similarity_distribution = zeros(1, num_epochs);
 NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
 
-% Fast Subspace Iteration Setup (2-step Subspace Iteration)
-M = min(size(evecs_Template_cov, 2), SSI_top_PCs);
-Template_guess = evecs_Template_cov(:, 1:M);
+% Use eig (full) for small matrices (<150 ch), eigs for large (benchmark crossover ~150-200)
+use_full_eig = (num_chans < 150);
 
 for epoch = 1:num_epochs
-    % SIGNAL SUBSPACE similarity via 2-step Fast Subspace Iteration
+    % SIGNAL SUBSPACE similarity
     cov_signal = cov_signal_epoched(:,:,epoch);
-    Y1_sig = cov_signal * Template_guess;
-    [Q1_sig, ~] = qr(Y1_sig, 0);
-    Y2_sig = cov_signal * Q1_sig;
-    [evecs_signal, ~] = qr(Y2_sig, 0);
+    if use_full_eig
+        [Vs, Ds] = eig(cov_signal);
+        [~, idx] = sort(diag(Ds), 'descend');
+        evecs_signal = Vs(:, idx(1:SSI_top_PCs));
+    else
+        [evecs_signal, ~] = eigs(cov_signal, SSI_top_PCs);
+    end
     SIGNAL_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_signal, evecs_Template_cov));
 
-    % NOISE SUBSPACE similarity via 2-step Fast Subspace Iteration
+    
+    % NOISE SUBSPACE similarity
     cov_noise = cov_noise_epoched(:,:,epoch);
-    Y1_noise = cov_noise * Template_guess;
-    [Q1_noise, ~] = qr(Y1_noise, 0);
-    Y2_noise = cov_noise * Q1_noise;
-    [evecs_noise, ~] = qr(Y2_noise, 0);
+    if use_full_eig
+        [Vn, Dn] = eig(cov_noise);
+        [~, idx] = sort(diag(Dn), 'descend');
+        evecs_noise = Vn(:, idx(1:SSI_top_PCs));
+    else
+        [evecs_noise, ~] = eigs(cov_noise, SSI_top_PCs);
+    end
     NOISE_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_noise, evecs_Template_cov));
+
 end
 
-%% Compute SENSAI Score (Signal-Stability Glass's Delta Approach)
-% 1. Scale the means
+%% Compute SENSAI Score
 SIGNAL_subspace_similarity = 100 * mean(SIGNAL_subspace_similarity_distribution);
 NOISE_subspace_similarity = 100 * mean(NOISE_subspace_similarity_distribution);
-
-% 2. Calculate the raw absolute objective
 SENSAI_score = SIGNAL_subspace_similarity - (noise_multiplier * NOISE_subspace_similarity);
-
 end
