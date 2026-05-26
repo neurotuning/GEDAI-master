@@ -151,11 +151,10 @@ end
 
 
 % Apply refCOV_top_PCs
-    % Use eigs for truncated decomposition (efficiency optimization)
-    [evecs_Template_cov, evals_Template_cov] = eigs(refCOV_reg, refCOV_top_PCs);
-    % Ensure sorted order
-    [~, sidxS_Template_cov] = sort(diag(evals_Template_cov), 'descend');
-    evecs_Template_cov = evecs_Template_cov(:, sidxS_Template_cov);
+    % Use exact eig decomposition and sort to ensure stability and reproducibility
+    [Vs, Ds] = eig(refCOV_reg);
+    [~, sidxS_Template_cov] = sort(diag(Ds), 'descend');
+    evecs_Template_cov = Vs(:, sidxS_Template_cov(1:refCOV_top_PCs));
 
 
 % --- Optimization Method Switch (Sliding Window) ---

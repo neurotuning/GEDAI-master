@@ -4,8 +4,8 @@ max_number_of_epochs = 500; % if EEG recording is long (default = 500 epochs)
 number_of_epochs = size(COV, 3);
 
 if  number_of_epochs > max_number_of_epochs
-rng(2,"twister") ; % for reproducibility
-random_epochs = randperm(number_of_epochs, max_number_of_epochs);
+stream = RandStream('twister', 'Seed', 2);
+random_epochs = randperm(stream, number_of_epochs, max_number_of_epochs);
 % EEGdata_epoched removed
 Eval = Eval (:, :, random_epochs);
 Evec = Evec (:, :,random_epochs);

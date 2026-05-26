@@ -51,7 +51,7 @@ T1_array = correction_factor * (105 - artifact_threshold_in) / 100;
 % SENSAI uses the GLOBAL percentile of ALL eigenvalues in the window it was
 % optimized on. We replicate that here by computing one percentile over ALL
 % eigenvalues (all channels × all epochs) and scaling per-epoch by T1_array.
-global_log_prctile = prctile(log_Eig_val_all, percentile_threshold, "Method", "approximate");
+global_log_prctile = prctile(log_Eig_val_all, percentile_threshold);
 Treshold1_array = T1_array * global_log_prctile;
 
 
