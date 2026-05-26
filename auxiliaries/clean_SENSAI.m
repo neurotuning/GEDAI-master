@@ -60,7 +60,7 @@ T1 = correction_factor * (105 - artifact_threshold_in) / 100;
     elseif strcmpi(signal_type, 'meg')
            percentile_threshold = 99;
     end
-Treshold1 = T1 * prctile(log_Eig_val_all, percentile_threshold);
+Treshold1 = T1 * prctile(log_Eig_val_all, percentile_threshold, "Method", "approximate");
 
 
 %% Compute Regularized Reference Covariance
