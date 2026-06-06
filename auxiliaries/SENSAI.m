@@ -47,6 +47,7 @@ num_epochs = size(cov_signal_epoched, 3);
 
 SIGNAL_subspace_similarity_distribution = zeros(1, num_epochs);
 NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
+baseline_similarity_distribution = zeros(1, num_epochs);
 
 % Fast Subspace Iteration Setup (2-step Subspace Iteration)
 M = min(size(evecs_Template_cov, 2), SSI_top_PCs);
@@ -78,10 +79,29 @@ for epoch = 1:num_epochs
     Y2_noise = cov_noise * Q1_noise;
     [evecs_noise, ~] = qr(Y2_noise, 0);
     NOISE_subspace_similarity_distribution(epoch) = prod(subspace_angles(evecs_noise, evecs_Template_cov));
+
+    % BASELINE SUBSPACE similarity (prior to any denoising)
+    cov_raw = cov_total(:,:,epoch);
+    Y1_raw = cov_raw * Template_guess;
+    [Q1_raw, ~] = qr(Y1_raw, 0);
+    Y2_raw = cov_raw * Q1_raw;
+    [evecs_raw, ~] = qr(Y2_raw, 0);
+    baseline_similarity_distribution(epoch) = prod(subspace_angles(evecs_raw, evecs_Template_cov));
 end
 
-%% Compute SENSAI Score
-SIGNAL_subspace_similarity = 100 * mean(SIGNAL_subspace_similarity_distribution);
-NOISE_subspace_similarity = 100 * mean(NOISE_subspace_similarity_distribution);
+%% Compute Weighted SENSAI Score (Graded Rank-Based Weighting)
+[~, sort_idx] = sort(baseline_similarity_distribution, 'ascend');
+raw_weights = zeros(1, num_epochs);
+raw_weights(sort_idx) = num_epochs:-1:1;
+
+sum_weights = sum(raw_weights);
+if sum_weights > 0
+    weights = raw_weights / sum_weights;
+else
+    weights = ones(1, num_epochs) / num_epochs;
+end
+
+SIGNAL_subspace_similarity = 100 * sum(SIGNAL_subspace_similarity_distribution .* weights);
+NOISE_subspace_similarity = 100 * sum(NOISE_subspace_similarity_distribution .* weights);
 SENSAI_score = SIGNAL_subspace_similarity - (noise_multiplier * NOISE_subspace_similarity);
 end
