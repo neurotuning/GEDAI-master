@@ -42,6 +42,7 @@ addParameter(p, 'signal_type',         'eeg');
 addParameter(p, 'MaxEvaluations',      20);
 addParameter(p, 'WindowRange',         [0.01, 10]);
 addParameter(p, 'EpochCyclesRange',    [2, 24]);
+addParameter(p, 'parallel',            true);
 p.parse(varargin{:});
 opts = p.Results;
 
@@ -102,7 +103,7 @@ try
         epoch_cycles, ...           % epoch_size_in_cycles  (optimized)
         opts.lowcut_frequency, ...
         opts.ref_matrix_type, ...
-        false, ...                  % parallel — off during bayesopt
+        opts.parallel, ...          % parallel
         false, ...                  % visualize_artifacts — off
         inf,  ...                   % ENOVA_threshold: no rejection
         opts.signal_type, ...
