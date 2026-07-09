@@ -126,6 +126,7 @@ col_bef  = [0.30 0.45 0.75];
 col_star = [1.00 0.88 0.00];
 
 % --- Panel 1: Before GEDAI ---
+figure(fig);
 ax1 = subplot(1, 2, 1);
 set(ax1, 'Position', [0.06, 0.12, 0.35, 0.74]); 
 hold(ax1, 'on');
@@ -149,6 +150,7 @@ grid(ax1, 'off');
 
 
 % --- Panel 2: After GEDAI ---
+figure(fig);
 ax2 = subplot(1, 2, 2);
 set(ax2, 'Position', [0.55, 0.12, 0.35, 0.74]); 
 hold(ax2, 'on');
