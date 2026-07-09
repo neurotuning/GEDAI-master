@@ -168,55 +168,48 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             % =========================================================
             % STEP 1: LOAD DATA
             % =========================================================
+            % Flag for raw recordings
+            isRaw = strcmpi(sInput.FileType, 'raw');
+            % Get channel file
+            [sChannel, iStudyChannel] = bst_get('ChannelForStudy', sInput.iStudy);
+            ChannelMat = in_bst_channel(sChannel.FileName);
+            channelFlag = [];
             % Load the BST file structure (works for both raw links and imported data)
             FileMat = in_bst_data(sInput.FileName);
 
-            isRaw = strcmpi(FileMat.DataType, 'raw');
-
+            % Read all data in data file
             if isRaw
                 % For raw links, FileMat.F is the sFile descriptor struct.
                 % Use in_fread with the correct Brainstorm API.
                 disp(['GEDAI> Reading raw file: ' sInput.FileName]);
                 sFile = FileMat.F;
-
-                % Get channel file FIRST (required by in_fread)
-                [sChannel, iStudyChannel] = bst_get('ChannelForStudy', sInput.iStudy);
-                ChannelMat = in_bst_channel(sChannel.FileName);
-
-                % Compute sample bounds from sFile.prop.times (seconds) — 0-indexed integers
-                SamplesBounds = round(sFile.prop.times * sFile.prop.sfreq);
-
-                % Read all channels, all samples, epoch 1
-                [DataMatrix, TimeVector] = in_fread(sFile, ChannelMat, 1, SamplesBounds);
-
+                % Force reading clean data: Apply CTF compensators and apply Projectors
+                ImportOptions = db_template('ImportOptions');
+                ImportOptions.ImportMode      = 'Time';
+                ImportOptions.UseCtfComp      = 1;
+                ImportOptions.UseSsp          = 1;
+                ImportOptions.EventsMode      = 'ignore';
+                ImportOptions.DisplayMessages = 0;
+                ImportOptions.RemoveBaseline  = 'no';
+                % Read all channels all samples, epoch 1
+                [DataMatrix, TimeVector] = in_fread(sFile, ChannelMat, 1, [], [], ImportOptions);
                 sInput.A          = DataMatrix;
                 sInput.TimeVector = TimeVector;
-                sInput.Comment    = FileMat.Comment;
-                if isfield(FileMat, 'History'),     sInput.History     = FileMat.History;     end
-                if isfield(FileMat, 'Events'),      sInput.Events      = FileMat.Events;      end
-                if isfield(FileMat, 'ChannelFlag'), sInput.ChannelFlag = FileMat.ChannelFlag; end
-
+                if isfield(sFile, 'channelflag'), channelFlag = sFile.channelflag; end
             else
                 % Imported data: data matrix is directly in FileMat.F
                 sInput.A          = FileMat.F;
                 sInput.TimeVector = FileMat.Time;
-                sInput.Comment    = FileMat.Comment;
-                if isfield(FileMat, 'History'),     sInput.History     = FileMat.History;     end
-                if isfield(FileMat, 'Events'),      sInput.Events      = FileMat.Events;      end
-                if isfield(FileMat, 'ChannelFlag'), sInput.ChannelFlag = FileMat.ChannelFlag; end
-
-                % Get channel file
-                [sChannel, iStudyChannel] = bst_get('ChannelForStudy', sInput.iStudy);
-                ChannelMat = in_bst_channel(sChannel.FileName);
+                if isfield(FileMat, 'ChannelFlag'), channelFlag = FileMat.ChannelFlag; end
             end
 
             % =========================================================
             % STEP 2: CHANNEL SELECTION
             % =========================================================
-            if ~isfield(sInput, 'ChannelFlag') || isempty(sInput.ChannelFlag)
-                sInput.ChannelFlag = ones(length(ChannelMat.Channel), 1);
+            if isempty(channelFlag)
+                channelFlag = ones(length(ChannelMat.Channel), 1);
             end
-            eeg_meg_idx = find(ismember({ChannelMat.Channel.Type}, {'EEG', 'MEG', 'MEG MAG', 'MEG GRAD'}) & (sInput.ChannelFlag(:)' == 1));
+            eeg_meg_idx = find(ismember({ChannelMat.Channel.Type}, {'EEG', 'MEG', 'MEG MAG', 'MEG GRAD'}) & (channelFlag(:)' == 1));
             if isempty(eeg_meg_idx)
                 bst_report('Error', sProcess, sInput, 'No EEG or MEG channels found.');
                 continue;
@@ -381,6 +374,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             % =========================================================
             % Compute comment strings FIRST (used by both Cleaned and Artifacts)
             current_comment = sInput.Comment;
+            % Remove time pattern from name. E.g. "Raw (0.00s,59.99s)" -- > Raw
             current_comment = regexprep(current_comment, ' \([\d\.]+s,[\d\.]+s\)', '');
             gedai_params    = FormatComment(sProcess);
 
@@ -410,32 +404,19 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
 
             % Build ChannelFlag (must be nChannels x 1)
             nChannelsTotal = size(DataOut, 1);
-            if isfield(sInput, 'ChannelFlag') && length(sInput.ChannelFlag) == nChannelsTotal
-                ChannelFlagOut = sInput.ChannelFlag(:);
+            if length(channelFlag) == nChannelsTotal
+                ChannelFlagOut = channelFlag(:);
             else
                 ChannelFlagOut = ones(nChannelsTotal, 1);
             end
 
             % --- Cleaned file ---
+            FileMatCleaned             = FileMat;
             FileMatCleaned.Comment     = ['Cleaned | ', current_comment, ' | ', gedai_params];
-            FileMatCleaned.DataType    = 'recordings';
+            sInput.A                   = DataOut;
             FileMatCleaned.Time        = TimeOut;
-            FileMatCleaned.F           = DataOut;
             FileMatCleaned.ChannelFlag = ChannelFlagOut;
-            if isfield(sInput, 'Events'),  FileMatCleaned.Events  = sInput.Events;  end
-            if isfield(sInput, 'History'), FileMatCleaned.History = sInput.History; end
-
-            % IMPORTANT: Save to the study folder, NOT the raw subfolder.
-            % Brainstorm detects raw files by checking if the filename contains 'data_0raw'.
-            % If we save inside the @raw... subfolder, the path will contain 'data_0raw'
-            % and Brainstorm will treat our imported file as a raw link, causing crashes.
-            sStudyOut   = bst_get('Study', sInput.iStudy);
-            StudyFolder = bst_fileparts(file_fullpath(sStudyOut.FileName));
-            CleanedFileName = bst_process('GetNewFilename', StudyFolder, 'data_gedai_cleaned');
-            bst_save(CleanedFileName, FileMatCleaned, 'v6');
-            db_add_data(sInput.iStudy, CleanedFileName, FileMatCleaned);
-            OutputFiles{end+1} = CleanedFileName;
-
+            OutputFiles{end+1} = SaveAndRegisterData(sInput, 'cleaned', FileMatCleaned, ChannelMat);
 
             % --- Artifacts file ---
             if save_artifacts
@@ -449,18 +430,12 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                         warning('GEDAI:ArtifactDimensionMismatch', 'Artifact time dimension does not match cleaned data.');
                     end
 
+                    FileMatArtifacts             = FileMat;
                     FileMatArtifacts.Comment     = ['Artifacts | ', current_comment, ' | ', gedai_params];
-                    FileMatArtifacts.DataType    = 'recordings';
+                    sInput.A                     = ArtifactData;
                     FileMatArtifacts.Time        = TimeOut;
-                    FileMatArtifacts.F           = ArtifactData;
                     FileMatArtifacts.ChannelFlag = ChannelFlagOut;
-                    if isfield(sInput, 'Events'),  FileMatArtifacts.Events  = sInput.Events;  end
-                    if isfield(sInput, 'History'), FileMatArtifacts.History = sInput.History; end
-
-                    ArtifactsFileName = bst_process('GetNewFilename', StudyFolder, 'data_gedai_artifacts');
-                    bst_save(ArtifactsFileName, FileMatArtifacts, 'v6');
-                    db_add_data(sInput.iStudy, ArtifactsFileName, FileMatArtifacts);
-                    OutputFiles{end+1} = ArtifactsFileName;
+                    OutputFiles{end+1} = SaveAndRegisterData(sInput, 'artifacts', FileMatArtifacts, ChannelMat);
 
                 catch ME_Art
                     warning('GEDAI:ArtifactSaveFailed', 'Failed to save Artifacts file: %s', ME_Art.message);
@@ -584,11 +559,50 @@ function [EEGclean, EEGartifacts] = align_gedai_outputs_to_mask(EEGclean, EEGart
     end
 end
 
-function sOutput = eeglab2brainstorm(EEG, sInput)
-    sOutput = sInput;
-    sOutput.A = EEG.data / 1e6; % µV -> V
-    if length(sOutput.TimeVector) ~= size(EEG.data, 2)
-        sOutput.TimeVector = EEG.times / 1000;
+function OutputFile = SaveAndRegisterData(sInput, GedaiDataType, FileMatOut, ChannelMat)
+    % DataOut is the field A in sInput
+    DataOut = sInput.A;
+
+    if strcmpi(sInput.FileType, 'raw')
+        % Save as raw file, in its own raw Study
+        ConditionName = [sInput.Condition, '_gedai_' GedaiDataType];
+        ProtocolInfo = bst_get('ProtocolInfo');
+        pathStudyOut = file_unique(bst_fullfile(ProtocolInfo.STUDIES, sInput.SubjectName, ConditionName));
+        [~, ConditionName] = bst_fileparts(pathStudyOut, 1);
+        % Output file name (derived from the condition name)
+        [~, rawBaseOut] = bst_fileparts(pathStudyOut);
+        rawBaseOut = regexprep(rawBaseOut, '^@raw', '');
+        RawFileOut = bst_fullfile(pathStudyOut, [rawBaseOut '.bst']);
+        % Get input study (to copy the creation date)
+        sInputStudy = bst_get('AnyFile', sInput.FileName);
+        % Create output study
+        iStudyOut = db_add_condition(sInput.SubjectName, ConditionName, [], sInputStudy.DateOfStudy);
+        sStudyOut = bst_get('Study', iStudyOut);
+        % Full name for link-to-raw file
+        MatFileName = bst_fullfile(ProtocolInfo.STUDIES, bst_fileparts(sStudyOut.FileName), ['data_0raw_' rawBaseOut '.mat']);
+        % Create empty Brainstorm-binary file
+        sFileOut = out_fopen(RawFileOut, 'BST-BIN', FileMatOut.F, ChannelMat);
+        % Update sFileOut
+        sFileOut.prop.times = FileMatOut.Time([1,end]);
+        % Set Output sFile structure
+        FileMatOut.F = sFileOut;
+        bst_save(MatFileName, FileMatOut, 'v6');
+        % Create new channel file
+        db_set_channel(iStudyOut, ChannelMat, 2, 0);
+        % Write all data in one block
+        out_fwrite(sFileOut, ChannelMat, 1, [], [], DataOut);
+        db_add_data(iStudyOut, MatFileName, FileMatOut);
+        OutputFile = MatFileName;
+    else
+        % Save as imported data, use input study folder
+        sStudyOut = bst_get('Study', sInput.iStudy);
+        pathStudyOut = bst_fileparts(file_fullpath(sStudyOut.FileName));
+        MatFileName = bst_process('GetNewFilename', pathStudyOut, ['data_gedai_' GedaiDataType]);
+        % Update FileMatOut
+        FileMatOut.F = DataOut;
+        bst_save(MatFileName, FileMatOut, 'v6');
+        db_add_data(sInput.iStudy, MatFileName, FileMatOut);
+        OutputFile = MatFileName;
     end
-    sOutput.Comment = EEG.setname;
 end
+
