@@ -20,8 +20,14 @@ vers = 'GEDAI v1.7 - May 2026';
 g = fileparts(which('eegplugin_GEDAI'));
 addpath(fullfile(g, 'auxiliaries'));
 
-    % Add menu item to EEGLAB interface
-    menu_item = uimenu(fig, 'label', 'GEDAI', 'callback', 'EEG = pop_GEDAI(EEG);eeglab redraw');
+    % Delete any pre-existing GEDAI menu items to avoid duplicates
+    old_menu = findobj(fig, 'type', 'uimenu', 'label', 'GEDAI');
+    if ~isempty(old_menu)
+        delete(old_menu);
+    end
+
+    % Add single direct menu item to EEGLAB top menu bar
+    uimenu(fig, 'label', 'GEDAI', 'callback', 'EEG = pop_GEDAI(EEG); eeglab redraw');
 
 
 end

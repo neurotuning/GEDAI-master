@@ -157,12 +157,16 @@ silent_mode = false;
 num_channels_rejected = 0;
 total_original_channels = size(EEGin.data, 1);
 
+optimization_type = 'parabolic';
 if ~isempty(varargin)
     for vargIdx = 1:length(varargin)
         currentArg = varargin{vargIdx};
         if isstruct(currentArg)
             if isfield(currentArg, 'silent')
                 silent_mode = currentArg.silent;
+            end
+            if isfield(currentArg, 'optimization_type')
+                optimization_type = currentArg.optimization_type;
             end
             if isfield(currentArg, 'original_channel_threshold')
                 original_channel_threshold = currentArg.original_channel_threshold;
@@ -689,7 +693,7 @@ if rem(broadband_epoch_size*EEGin.srate, 2) ~= 0
 end
 
     disp([newline 'SENSAI threshold detection...please wait']);
-    broadband_optimization_type = 'parabolic';
+    broadband_optimization_type = optimization_type;
     broadband_artifact_threshold_type = artifact_threshold_type;
     broadband_minThreshold = -4;
     broadband_maxThreshold = 12;
@@ -829,11 +833,11 @@ if parallel
             current_minThreshold = band_min_thresholds(f);
 
             try
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             catch ME
                  % If OOM or other memory error, try single precision
                  warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
             
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -902,7 +906,7 @@ if ~parallel || ~success_parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
             
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             disp(['processing wavelet band (single) = ' num2str(f)])
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -1271,6 +1275,8 @@ EEGclean.etc.GEDAI.SENSAI_score_per_band = SENSAI_score_per_band;
 EEGclean.etc.GEDAI.artifact_threshold_per_band = artifact_threshold_per_band;
 EEGclean.etc.GEDAI.artifact_threshold_array_per_band = artifact_threshold_array_per_band;
 EEGclean.etc.GEDAI.freq_str_cell = freq_str_cell;
+if exist('center_frequencies', 'var'), EEGclean.etc.GEDAI.center_frequencies = center_frequencies; end
+if exist('upper_frequencies', 'var'), EEGclean.etc.GEDAI.upper_frequencies = upper_frequencies; end
 EEGclean.etc.GEDAI.epoch_sizes_per_wavelet_band = epoch_sizes_per_wavelet_band;
 EEGclean.etc.GEDAI.broadband_epoch_size = broadband_epoch_size;
 EEGclean.etc.GEDAI.mean_ENOVA = mean_ENOVA;
@@ -1478,7 +1484,9 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                 
                 if any(chanidx == 0)
                     missing_labels = strjoin(electrodes_labels(chanidx == 0), ', ');
-                    error(['Electrode labels not found: ' missing_labels '. Either remove them using ''Edit ->Select data'' or select the ''interpolated'' leadfield matrix for non-standard locations.']);
+                    disp(['Electrode labels not in standard template: ' missing_labels '. Automatically switching to interpolated leadfield matrix...']);
+                    [refCOV, G_full] = GEDAI_create_refCOV('interpolated', EEGin, EEGavRef, signal_type, internal_reference);
+                    return;
                 end
                 
                 G_full = L.leadfield4GEDAI.Gain(chanidx, :);

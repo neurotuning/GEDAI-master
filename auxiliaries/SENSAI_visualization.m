@@ -109,11 +109,21 @@ end
 if nargin >= 10 && ~isempty(SENSAI_score)
     if nargin < 11 || isempty(mean_ENOVA), mean_ENOVA = 0; end
     if nargin < 12 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
-    if nargin < 13 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
-    if isempty(artifact_threshold_type), artifact_threshold_type = 'auto'; end
+    if isempty(artifact_threshold_type)
+        thresh_str = 'bayesopt';
+    elseif isnumeric(artifact_threshold_type)
+        thresh_str = 'bayesopt';
+    elseif ischar(artifact_threshold_type) || isstring(artifact_threshold_type)
+        thresh_str = char(artifact_threshold_type);
+        if isempty(thresh_str) || strcmp(thresh_str, '[]')
+            thresh_str = 'bayesopt';
+        end
+    else
+        thresh_str = 'bayesopt';
+    end
     if isempty(smoothing_window_seconds), smoothing_window_seconds = Inf; end
 
-    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%, ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '% [' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
+    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%, ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '% [' thresh_str ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
 else
     plot_title = 'SENSAI visualization:  Subspace Similarity  vs  Epoch Power';
 end

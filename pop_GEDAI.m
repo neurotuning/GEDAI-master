@@ -16,6 +16,27 @@
 % dr.t.ros@gmail.com
 
 function [EEG, com] = pop_GEDAI(EEG, varargin)
+%% 0. Handle Missing/Empty Input Dataset
+if nargin < 1 || isempty(EEG)
+    if evalin('base', 'exist(''EEG'', ''var'')')
+        EEG = evalin('base', 'EEG');
+    elseif evalin('base', 'exist(''ALLEEG'', ''var'')')
+        ALLEEG_temp = evalin('base', 'ALLEEG');
+        if ~isempty(ALLEEG_temp)
+            EEG = ALLEEG_temp(1);
+        end
+    else
+        if exist('pop_loadset', 'file')
+            EEG = pop_loadset();
+        else
+            [fname, fpath] = uigetfile('*.set', 'Select EEG dataset');
+            if isequal(fname, 0), return; end
+            data_st = load(fullfile(fpath, fname), '-mat');
+            if isfield(data_st, 'EEG'), EEG = data_st.EEG; else, EEG = data_st; end
+        end
+    end
+end
+
 %% Default parameter values
 artifact_threshold = 'auto';
 epoch_size_in_cycles = 12;
@@ -59,7 +80,18 @@ p = inputParser;
 addParameter(p, 'artifact_threshold', artifact_threshold);
 addParameter(p, 'parallel_processing', false); % Add output visual parameter
 addParameter(p, 'visualization_A', false); % Add output visual parameter
+addParameter(p, 'run_bayesopt', true);
+addParameter(p, 'bayesopt_max_evals', 20);
 p.parse(varargin{:}); % Parse the input arguments
+
+initial_bayesopt_val = 1;
+if isfield(p.Results, 'run_bayesopt')
+    if islogical(p.Results.run_bayesopt)
+        initial_bayesopt_val = double(p.Results.run_bayesopt);
+    elseif isnumeric(p.Results.run_bayesopt)
+        initial_bayesopt_val = double(p.Results.run_bayesopt > 0);
+    end
+end
 
 % Create GUI for parameter input (rest of the code remains the same)
 uilist = { ...    
@@ -68,6 +100,9 @@ uilist = { ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency'} ...
     {'style' 'text' 'string' 'Sliding window (in seconds, Inf=whole file)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds'} ...
+    {} ...
+    {'style' 'text' 'string' 'Outer Loop Optimization:'} {'style' 'checkbox' 'string' 'Run Bayesian Optimization (bayesopt)' 'tag' 'run_bayesopt' 'Value' initial_bayesopt_val}, ...
+    {'style' 'text' 'string' 'Bayesopt Max Evaluations'} {'style' 'edit' 'string' num2str(p.Results.bayesopt_max_evals) 'tag' 'bayesopt_max_evals'}, ...
     {} ...
     {'style' 'text' 'string' 'Bad Epoch Detection Threshold (ENOVA)'} {'style' 'edit' 'string' num2str(ENOVA_threshold_per_epoch) 'tag' 'ENOVA_threshold_per_epoch'}, ...
     {'style' 'text' 'string' 'Reject bad epochs:'} {'style' 'checkbox' 'string' '' 'tag' 'reject_epochs_by_enova' 'value' 0}, ...
@@ -80,7 +115,7 @@ uilist = { ...
     {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1}, ...
     {'style' 'text' 'string' 'Artifact visualization:'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1}, ...
 };
-geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1] [1, 1] [1, 1] };
+geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1.2, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1] [1, 1] [1, 1] };
 title = '  GEDAI denoising toolbox |  v1.7  ';
 
 % Get user input
@@ -141,7 +176,35 @@ visualize_artifacts = logical(out.visualization_A);
 % Popup-only behavior: index 1 is AvgRef; any other index applies channel re-reference.
 output_reference_channel = strtrim(selected_output_reference_channel);
 
-[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
+if out.run_bayesopt
+    bayesopt_max_evals = str2double(out.bayesopt_max_evals);
+    if isnan(bayesopt_max_evals) || bayesopt_max_evals <= 0
+        bayesopt_max_evals = 20;
+    end
+    
+    switch artifact_threshold
+        case 'auto', default_d = 7;
+        case 'auto+', default_d = 8.5;
+        case 'auto-', default_d = 4;
+        otherwise
+            if isnumeric(artifact_threshold), default_d = artifact_threshold; else, default_d = 7; end
+    end
+    
+    [best_params, EEG, results] = GEDAI_bayesopt(EEG, ...
+        'max_evals', bayesopt_max_evals, ...
+        'lowcut_frequency', lowcut_frequency, ...
+        'ref_matrix_type', ref_matrix_type, ...
+        'smoothing_window_seconds', smoothing_window_seconds, ...
+        'default_denoising', default_d, ...
+        'default_epoch_cycles', epoch_size_in_cycles, ...
+        'parallel', use_parallel, ...
+        'visualize', visualize_artifacts);
+        
+    com = sprintf('EEG = GEDAI_bayesopt(EEG, ''max_evals'', %d, ''lowcut_frequency'', %g, ''ref_matrix_type'', ''%s'');', ...
+        bayesopt_max_evals, lowcut_frequency, ref_matrix_type);
+else
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
+end
   
 EEG = eegh(com, EEG); % update EEG.history
     

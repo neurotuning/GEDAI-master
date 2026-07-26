@@ -158,7 +158,7 @@ if ~isinf(smoothing_window_seconds)
             [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(COV_sub(:,:,i), refCOV_reg, 'chol');
         end
         
-        switch optimization_type
+        switch lower(optimization_type)
             case 'parabolic'
                 [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
             case 'grid'
@@ -187,6 +187,16 @@ if ~isinf(smoothing_window_seconds)
                     optimal_artifact_threshold = AutomaticThresholdSweep(NOISE_changepoint_index(1));
                 else
                     optimal_artifact_threshold = AutomaticThresholdSweep(SENSAI_index);
+                end
+            case {'none', 'fixed'}
+                if isnumeric(artifact_threshold_type)
+                    optimal_artifact_threshold = artifact_threshold_type;
+                else
+                    val_parsed = str2double(artifact_threshold_type);
+                    if isnan(val_parsed)
+                        val_parsed = 3;
+                    end
+                    optimal_artifact_threshold = val_parsed;
                 end
         end
         optimal_threshold_per_window(w) = optimal_artifact_threshold;
@@ -567,7 +577,7 @@ else
         Evec_sub = Evec(:,:,idx_start:idx_end);
         COV_sub = COV(:,:,idx_start:idx_end);
         
-        switch optimization_type
+        switch lower(optimization_type)
             case 'parabolic'
                 [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
             
@@ -601,6 +611,16 @@ else
                     optimal_artifact_threshold = AutomaticThresholdSweep(NOISE_changepoint_index(1));
                 else
                     optimal_artifact_threshold = AutomaticThresholdSweep(SENSAI_index);
+                end
+            case {'none', 'fixed'}
+                if isnumeric(artifact_threshold_type)
+                    optimal_artifact_threshold = artifact_threshold_type;
+                else
+                    val_parsed = str2double(artifact_threshold_type);
+                    if isnan(val_parsed)
+                        val_parsed = 3;
+                    end
+                    optimal_artifact_threshold = val_parsed;
                 end
         end
         optimal_threshold_per_window(w) = optimal_artifact_threshold;
