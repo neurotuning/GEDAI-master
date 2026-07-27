@@ -364,6 +364,7 @@ if ENOVA_threshold_per_channel < inf
         if strcmp(signal_type, 'eeg')
             if strcmp(internal_reference, 'REST')
                 disp('Re-applying REST reference after interpolation...');
+                [~, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGin, signal_type, internal_reference);
                 EEGclean_av = GEDAI_nonRankDeficientAveRef(EEGclean);
                 EEGartifacts_av = GEDAI_nonRankDeficientAveRef(EEGartifacts);
                 EEGclean.data = rest_refer(EEGclean_av.data, G_full');
@@ -423,17 +424,25 @@ if ENOVA_threshold_per_channel < inf
         if visualize_artifacts
             % Compute EEGavRef for visualization
             if strcmp(signal_type, 'eeg')
-                if strcmp(internal_reference, 'REST')
-                    EEGavRef_for_vis = EEGavRef;
+                is_standard_avg_ref = max(abs(mean(EEGin.data, 1))) < 1e-5;
+                if is_standard_avg_ref 
+                    EEG_av_for_vis = EEGin;
+                elseif max(abs(sum(EEGin.data, 1) / (size(EEGin.data, 1) + 1))) < 1e-5
+                    EEG_av_for_vis = EEGin;
                 else
-                    is_standard_avg_ref = max(abs(mean(EEGin.data, 1))) < 1e-5;
-                    if is_standard_avg_ref 
-                        EEGavRef_for_vis = EEGin;
-                    elseif max(abs(sum(EEGin.data, 1) / (size(EEGin.data, 1) + 1))) < 1e-5
-                        EEGavRef_for_vis = EEGin;
-                    else
-                        EEGavRef_for_vis = GEDAI_nonRankDeficientAveRef(EEGin);
-                    end 
+                    EEG_av_for_vis = GEDAI_nonRankDeficientAveRef(EEGin);
+                end 
+
+                if strcmp(internal_reference, 'REST')
+                    [~, G_full_for_vis] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av_for_vis, signal_type, internal_reference);
+                    EEGavRef_for_vis = EEG_av_for_vis;
+                    EEGavRef_for_vis.data = rest_refer(EEG_av_for_vis.data, G_full_for_vis');
+                    EEGavRef_for_vis.ref = 'REST';
+                    for chIdx = 1:EEGavRef_for_vis.nbchan
+                        EEGavRef_for_vis.chanlocs(chIdx).ref = 'REST';
+                    end
+                else
+                    EEGavRef_for_vis = EEG_av_for_vis;
                 end
             else
                 EEGavRef_for_vis = EEGin;
