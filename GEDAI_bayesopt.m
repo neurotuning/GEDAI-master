@@ -1,33 +1,32 @@
-function [best_params, best_EEGclean, results] = GEDAI_bayesopt(EEGin, varargin)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = GEDAI_bayesopt(EEGin, varargin)
 % GEDAI_BAYESOPT Bayesian Optimization of GEDAI Hyperparameters
 %
 % Usage:
-%   [best_params, best_EEGclean, results] = GEDAI_bayesopt(EEGin)
-%   [best_params, best_EEGclean, results] = GEDAI_bayesopt(EEGin, 'max_evals', 50, ...)
+%   [EEGclean, EEGartifacts, SENSAI_score, ...] = GEDAI_bayesopt(EEGin)
+%   [EEGclean, EEGartifacts, SENSAI_score, ...] = GEDAI_bayesopt(EEGin, 'max_evals', 20, ...)
 %
 % Optimized Hyperparameters:
 %   1. Denoising strength (1 to 9)
 %   2. Epoch size in wave cycles (2 to 20)
-%   3. Sliding window size in seconds (2 to 60, or Inf)
 %
 % Inputs:
 %   EEGin                 - Input EEGLAB structure
 %   'max_evals'           - Maximum number of objective evaluations (default: 20)
-%   'num_seed_points'     - Number of initial random seed points (default: 5)
 %   'lowcut_frequency'    - Low-cut frequency in Hz (default: 0.5)
 %   'ref_matrix_type'     - Reference leadfield matrix type (default: 'precomputed')
 %   'signal_type'         - Signal type: 'eeg' or 'meg' (default: 'eeg')
-%   'parallel'            - Enable parallel processing (default: false)
-%   'visualize'           - Enable realtime dark-themed visualization (default: true)
+%   'parallel'            - Enable parallel processing (default: true)
+%   'visualize'           - Enable realtime dark-themed visualization (default: false)
 %   'denoising_range'     - Range for denoising strength [min, max] (default: [1, 9])
 %   'epoch_cycles_range'  - Range for epoch size in wave cycles [min, max] (default: [2, 20])
-%   'window_sec_range'    - Range for sliding window size in seconds [min, max] (default: [2, 61], >60 maps to Inf)
 %   'verbose'             - Verbosity level for bayesopt (default: 0)
 %
-% Outputs:
-%   best_params           - Struct with optimal hyperparameters and SENSAI score
-%   best_EEGclean         - Cleaned EEGLAB structure using best hyperparameters
-%   results               - MATLAB BayesianOptimization object
+% Outputs (Identical to GEDAI.m):
+%   EEGclean              - Cleaned EEGLAB structure using optimal hyperparameters
+%   EEGartifacts          - Removed artifact data
+%   SENSAI_score          - Overall SENSAI score (%) for optimal data
+%   SENSAI_score_per_band - SENSAI score per frequency band (%)
+%   ... (matches GEDAI.m output arguments 1-10)
 %
 % NeuroTuning Lab - University of Geneva
 
@@ -62,8 +61,8 @@ addParameter(p, 'num_seed_points', 5, @isnumeric);
 addParameter(p, 'lowcut_frequency', 0.5, @isnumeric);
 addParameter(p, 'ref_matrix_type', 'precomputed');
 addParameter(p, 'signal_type', 'eeg', @(x) ischar(x) || isstring(x));
-addParameter(p, 'parallel', false, @islogical);
-addParameter(p, 'visualize', true, @islogical);
+addParameter(p, 'parallel', true, @islogical);
+addParameter(p, 'visualize', false, @islogical);
 addParameter(p, 'denoising_range', [1, 9], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'epoch_cycles_range', [2, 20], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'smoothing_window_seconds', Inf, @isnumeric);
@@ -217,13 +216,19 @@ end
 w_opt = opts.smoothing_window_seconds;
 
 % Perform final run using best parameters with artifact visualization enabled
-[best_EEGclean, ~, score_opt] = GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
+[EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = ...
+    GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
     opts.ref_matrix_type, opts.parallel, opts.visualize, inf, inf, signal_type, w_opt, struct('silent', true));
 
 best_params = struct(...
     'denoising_strength', d_opt, ...
     'epoch_size_in_cycles', c_opt, ...
-    'SENSAI_score', score_opt);
+    'SENSAI_score', SENSAI_score);
+
+if isstruct(EEGclean) && isfield(EEGclean, 'etc')
+    EEGclean.etc.GEDAI.bayesopt_best_params = best_params;
+    EEGclean.etc.GEDAI.bayesopt_results = results;
+end
 
 end
 
