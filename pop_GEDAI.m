@@ -80,11 +80,11 @@ p = inputParser;
 addParameter(p, 'artifact_threshold', artifact_threshold);
 addParameter(p, 'parallel_processing', false); % Add output visual parameter
 addParameter(p, 'visualization_A', false); % Add output visual parameter
-addParameter(p, 'run_bayesopt', true);
+addParameter(p, 'run_bayesopt', false);
 addParameter(p, 'bayesopt_max_evals', 20);
 p.parse(varargin{:}); % Parse the input arguments
 
-initial_bayesopt_val = 1;
+initial_bayesopt_val = 0;
 if isfield(p.Results, 'run_bayesopt')
     if islogical(p.Results.run_bayesopt)
         initial_bayesopt_val = double(p.Results.run_bayesopt);
@@ -96,7 +96,8 @@ end
 % Create GUI for parameter input (rest of the code remains the same)
 uilist = { ...    
     {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' '                    auto|                    auto+|                    auto-'} ...
-    {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' '          precomputed|          interpolated|          warped'} ...
+    {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' '          subject_adapted|          precomputed|          interpolated|          warped'} ...
+    {'style' 'text' 'string' 'Subject-adapted alpha (0=empirical, 1=leadfield)'} {'style' 'edit' 'string' '0.5' 'tag' 'subject_adapted_alpha'} ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency'} ...
     {'style' 'text' 'string' 'Sliding window (in seconds, Inf=whole file)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds'} ...
@@ -115,7 +116,7 @@ uilist = { ...
     {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1}, ...
     {'style' 'text' 'string' 'Artifact visualization:'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1}, ...
 };
-geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1.2, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1] [1, 1] [1, 1] };
+geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1.2, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1] [1, 1] [1, 1] };
 title = '  GEDAI denoising toolbox |  v1.7  ';
 
 % Get user input
@@ -125,8 +126,12 @@ if isempty(out), return; end
 threshold_cell = {'auto', 'auto+', 'auto-'};
 artifact_threshold = threshold_cell{userInput{1}};
 
-ref_matrix_cell = {'precomputed', 'interpolated', 'warped'};
+ref_matrix_cell = {'subject_adapted', 'precomputed', 'interpolated', 'warped'};
 ref_matrix_type = ref_matrix_cell{userInput{2}};
+subject_adapted_alpha = str2double(out.subject_adapted_alpha);
+if isnan(subject_adapted_alpha) || subject_adapted_alpha < 0 || subject_adapted_alpha > 1
+    subject_adapted_alpha = 0.5;
+end
 epoch_size_in_cycles = str2double(out.epoch_size_in_cycles);
 lowcut_frequency = str2double(out.lowcut_frequency);
 
@@ -203,7 +208,8 @@ if out.run_bayesopt
     com = sprintf('EEG = GEDAI_bayesopt(EEG, ''max_evals'', %d, ''lowcut_frequency'', %g, ''ref_matrix_type'', ''%s'');', ...
         bayesopt_max_evals, lowcut_frequency, ref_matrix_type);
 else
-    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
+    gedai_opts = struct('subject_adapted_alpha', subject_adapted_alpha);
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel, gedai_opts);
 end
   
 EEG = eegh(com, EEG); % update EEG.history

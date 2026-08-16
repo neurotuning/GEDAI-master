@@ -44,7 +44,11 @@
 %                                 "warped" uses an EEGLAB/Fieldtrip BEM surface source model 
 %                                 (Colin27) warped to the current electrode locations.
 %
-%                                 Altenatively, you can input a "custom" covariance matrix
+%                                 "subject_adapted" constructs a subject-specific reference matrix
+%                                 by extracting cleanest epoch forward patterns via Pass 1 GEVD
+%                                 and blending them with the precomputed leadfield prior.
+%
+%                                 Alternatively, you can input a "custom" covariance matrix
 %                                 (with dimensions channel x channel) via a matlab variable
 % 
 % 
@@ -173,6 +177,9 @@ if ~isempty(varargin)
                 num_channels_rejected = currentArg.num_channels_rejected;
                 total_original_channels = currentArg.total_original_channels;
             end
+            if isfield(currentArg, 'subject_adapted_alpha')
+                subject_adapted_alpha = currentArg.subject_adapted_alpha;
+            end
         end
     end
 end
@@ -194,6 +201,9 @@ else
 end
 if nargin < 11 || isempty(smoothing_window_seconds)
     smoothing_window_seconds = Inf; % default: use whole file (no sliding window)
+end
+if ~exist('subject_adapted_alpha', 'var') || isempty(subject_adapted_alpha)
+    subject_adapted_alpha = 0.5; % default alpha for subject_adapted blending
 end
 % Validate signal_type
 if ~ismember(lower(signal_type), {'eeg', 'meg'})
@@ -573,7 +583,7 @@ end
 
 
 %% Create Reference Covariance Matrix (refCOV)
-[refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+[refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
 
 if strcmp(internal_reference, 'REST')
     EEGavRef = EEG_av;
@@ -697,7 +707,12 @@ end
     broadband_artifact_threshold_type = artifact_threshold_type;
     broadband_minThreshold = -4;
     broadband_maxThreshold = 12;
-    [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
+    if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
+        broadband_refCOV = GEDAI_create_subject_refCOV(double(EEGavRef.data), [], G_base, subject_adapted_alpha, 1e-6, 3, EEGavRef.srate, broadband_epoch_size);
+    else
+        broadband_refCOV = refCOV;
+    end
+    [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, broadband_refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
 
@@ -832,12 +847,18 @@ if parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
 
+            if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
+                refCOV_band = GEDAI_create_subject_refCOV(wavelet_data_band, [], G_base, subject_adapted_alpha, 1e-6, 3, srate, current_epoch_size);
+            else
+                refCOV_band = refCOV;
+            end
+
             try
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             catch ME
                  % If OOM or other memory error, try single precision
                  warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
             
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -873,13 +894,19 @@ if ~parallel || ~success_parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
             
+            if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
+                refCOV_band = GEDAI_create_subject_refCOV(wavelet_data_band, [], G_base, subject_adapted_alpha, 1e-6, 3, srate, current_epoch_size);
+            else
+                refCOV_band = refCOV;
+            end
+
             try
              disp(['processing wavelet band = ' num2str(f)])   
-             [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+             [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -906,7 +933,13 @@ if ~parallel || ~success_parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
             
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
+                refCOV_band = GEDAI_create_subject_refCOV(wavelet_data_band, [], G_base, subject_adapted_alpha, 1e-6, 3, srate, current_epoch_size);
+            else
+                refCOV_band = refCOV;
+            end
+
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             disp(['processing wavelet band (single) = ' num2str(f)])
             
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -1441,16 +1474,23 @@ for chIdx = 1:EEG.nbchan
 end
 end
 
-function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef, signal_type, internal_reference)
+function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef, signal_type, internal_reference)
     if nargin < 5
         internal_reference = 'AvgRef';
     end
     G_full = [];
+    G_base = [];
     if ~ischar(ref_matrix_type)
         refCOV = ref_matrix_type; % Use custom covariance matrix
+        G_base = ref_matrix_type;
         disp([newline 'Using custom covariance matrix']);
     else
         switch ref_matrix_type
+            case 'subject_adapted'
+                disp([newline 'GEDAI Leadfield model: Subject-adapted (100% empirical patterns from top 3 signal components per epoch)']);
+                [G_base, G_full] = GEDAI_create_refCOV('precomputed', EEGin, EEGavRef, signal_type, internal_reference);
+                refCOV = GEDAI_create_subject_refCOV(EEGavRef, [], G_base, 0.5, 1e-6, 3, EEGavRef.srate, 1);
+
             case 'precomputed'
                 if strcmp(internal_reference, 'REST')
                     disp([newline 'GEDAI Leadfield model: BEM precomputed for EEG (REST reference)'])
@@ -1581,6 +1621,9 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
         end
     end
 
+    if isempty(G_base)
+        G_base = refCOV;
+    end
     % Ensure refCOV is real and perfectly symmetric to prevent eig/eigs errors
     refCOV = real(refCOV);
     refCOV = (refCOV + refCOV') / 2;
