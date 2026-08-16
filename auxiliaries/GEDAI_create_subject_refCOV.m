@@ -1,26 +1,26 @@
-function [B_final, B_sub, A_clean, clean_filters] = GEDAI_create_subject_refCOV(EEG, clean_filters, G_norm, alpha, gamma, num_comp_per_epoch, srate, epoch_size, blending_method)
+function [B_final, B_sub, A_clean, clean_filters] = GEDAI_create_subject_refCOV(EEG, clean_filters, G_norm, alpha, regularization_lambda, num_comp_per_epoch, srate, epoch_size, blending_method)
 % GEDAI_CREATE_SUBJECT_REFCOV Constructs a subject-specific empirical reference 
 % covariance matrix from cleanest epoch forward patterns regularized with a leadfield prior.
 %
 % Usage:
-%   [B_final, B_sub, A_clean, clean_filters] = GEDAI_create_subject_refCOV(EEG, [], G_norm, alpha, gamma, num_comp_per_epoch, srate, epoch_size, blending_method)
+%   [B_final, B_sub, A_clean, clean_filters] = GEDAI_create_subject_refCOV(EEG, [], G_norm, alpha, regularization_lambda, num_comp_per_epoch, srate, epoch_size, blending_method)
 %
 % Inputs:
-%   EEG                  - EEGLAB struct (continuous or epoched) or [N_chan x N_samples x K_epochs] data matrix.
-%   clean_filters        - (Optional) Matrix of spatial filters per epoch. If empty, GEVD is run per epoch against G_norm.
-%   G_norm               - [N_chan x N_chan] theoretical leadfield Gram matrix (refCOV).
-%   alpha                - (Optional) Blending parameter between empirical patterns and G_norm. Default: 0
-%   gamma                - (Optional) Diagonal regularization floor. Default: 1e-6
-%   num_comp_per_epoch   - (Optional) Number of cleanest signal components to retain per epoch. Default: 3
-%   srate                - (Optional) Sampling rate in Hz. Default: EEG.srate or 250
-%   epoch_size           - (Optional) Epoch size in seconds for continuous data windowing. Default: 1
-%   blending_method      - (Optional) 'procrustes' (default), 'riemannian', or 'linear'.
+%   EEG                   - EEGLAB struct (continuous or epoched) or [N_chan x N_samples x K_epochs] data matrix.
+%   clean_filters         - (Optional) Matrix of spatial filters per epoch. If empty, GEVD is run per epoch against G_norm.
+%   G_norm                - [N_chan x N_chan] theoretical leadfield Gram matrix (refCOV).
+%   alpha                 - (Optional) Blending parameter between empirical patterns and G_norm. Default: 0.5
+%   regularization_lambda - (Optional) Diagonal isotropic shrinkage parameter. Default: 0.05
+%   num_comp_per_epoch    - (Optional) Number of cleanest signal components to retain per epoch. Default: 3
+%   srate                 - (Optional) Sampling rate in Hz. Default: EEG.srate or 250
+%   epoch_size            - (Optional) Epoch size in seconds for continuous data windowing. Default: 1
+%   blending_method       - (Optional) 'procrustes' (default), 'riemannian', or 'linear'.
 %
 % Outputs:
-%   B_final              - [N_chan x N_chan] Regularized subject-specific reference covariance matrix.
-%   B_sub                - [N_chan x N_chan] Pure empirical reference covariance matrix (unregularized).
-%   A_clean              - [N_chan x (K_epochs * num_comp_per_epoch)] Matrix of column-concatenated clean forward patterns.
-%   clean_filters        - Spatial filters extracted per epoch.
+%   B_final               - [N_chan x N_chan] Regularized subject-specific reference covariance matrix.
+%   B_sub                 - [N_chan x N_chan] Pure empirical reference covariance matrix (unregularized).
+%   A_clean               - [N_chan x (K_epochs * num_comp_per_epoch)] Matrix of column-concatenated clean forward patterns.
+%   clean_filters         - Spatial filters extracted per epoch.
 
 if nargin < 3 || isempty(G_norm)
     error('G_norm (theoretical leadfield reference matrix) is required.');
@@ -28,8 +28,8 @@ end
 if nargin < 4 || isempty(alpha)
     alpha = 0.5; % Default to 50% empirical, 50% leadfield (Riemannian geodesic midpoint)
 end
-if nargin < 5 || isempty(gamma)
-    gamma = 1e-6;
+if nargin < 5 || isempty(regularization_lambda)
+    regularization_lambda = 0.05; % Standardized 5% isotropic shrinkage
 end
 if nargin < 6 || isempty(num_comp_per_epoch)
     num_comp_per_epoch = 3; % Default: top 3 signal components per epoch
@@ -69,10 +69,20 @@ end
 
 num_comp_per_epoch = min(num_comp_per_epoch, N_chan);
 
-% Ensure G_norm is symmetric and non-singular for GEVD
+% Ensure G_norm is symmetric and apply standardized isotropic shrinkage for GEVD
 G_norm = real(G_norm);
 G_norm = (G_norm + G_norm') / 2;
-G_reg = G_norm + 1e-6 * trace(G_norm) / N_chan * eye(N_chan);
+reg_val_G = trace(G_norm) / N_chan;
+G_reg = (1 - regularization_lambda) * G_norm + regularization_lambda * reg_val_G * eye(N_chan);
+G_reg = (G_reg + G_reg') / 2;
+
+% Precompute Cholesky factor of G_reg once for accelerated symmetric eigensolving
+try
+    R_chol = chol(G_reg);
+    has_chol = true;
+catch
+    has_chol = false;
+end
 
 A_clean_list = cell(1, N_epochs);
 clean_filters_cell = cell(1, N_epochs);
@@ -95,26 +105,29 @@ for k = 1:N_epochs
             v_k_set = clean_filters(:, (k-1)*num_comp_per_epoch + (1:num_comp_per_epoch));
         end
     else
-        % Solve GEVD: C_k * v = lambda * G_reg * v
-        [V_eig, D_eig] = eig(C_k, G_reg);
-        % Smallest eigenvalues = cleanest neural components (highest SNR relative to leadfield prior)
-        [~, sort_idx] = sort(diag(D_eig), 'ascend');
-        v_k_set = V_eig(:, sort_idx(1:num_comp_per_epoch));
+        if has_chol
+            % Accelerated symmetric eigenvalue decomposition via pre-factored Cholesky
+            C_tilde = (R_chol') \ (C_k / R_chol);
+            C_tilde = (C_tilde + C_tilde') / 2;
+            [V_tilde, D_eig] = eig(C_tilde, 'vector');
+            [~, sort_idx] = sort(D_eig, 'ascend');
+            y_sel = V_tilde(:, sort_idx(1:num_comp_per_epoch));
+            v_k_set = R_chol \ y_sel;
+        else
+            % Fallback to standard QZ generalized eigenvalue decomposition
+            [V_eig, D_eig] = eig(C_k, G_reg);
+            [~, sort_idx] = sort(diag(D_eig), 'ascend');
+            v_k_set = V_eig(:, sort_idx(1:num_comp_per_epoch));
+        end
     end
     
     clean_filters_cell{k} = v_k_set;
     
-    % Compute physical forward pattern a_m for each selected component
-    a_k_set = zeros(N_chan, size(v_k_set, 2));
-    for m = 1:size(v_k_set, 2)
-        v_km = v_k_set(:, m);
-        denom = v_km' * C_k * v_km;
-        if abs(denom) < 1e-12
-            a_k_set(:, m) = C_k * v_km;
-        else
-            a_k_set(:, m) = (C_k * v_km) / denom;
-        end
-    end
+    % Vectorized computation of physical forward patterns a_m for selected components
+    Cv = C_k * v_k_set;
+    denom = sum(v_k_set .* Cv, 1);
+    denom(abs(denom) < 1e-12) = 1;
+    a_k_set = Cv ./ denom;
     
     A_clean_list{k} = a_k_set;
 end
@@ -138,87 +151,96 @@ else
 end
 
 if alpha == 0
-    % Pure empirical, no blending needed
-    B_final = B_sub + gamma * eye(N_chan);
+    % Pure empirical, apply standard shrinkage
+    reg_val_B = tr_B / N_chan;
+    B_final = (1 - regularization_lambda) * B_sub + regularization_lambda * reg_val_B * eye(N_chan);
 
 elseif alpha == 1
-    % Pure leadfield prior
-    B_final = G_scaled + gamma * eye(N_chan);
+    % Pure leadfield prior, apply standard shrinkage
+    reg_val_G_sc = trace(G_scaled) / N_chan;
+    B_final = (1 - regularization_lambda) * G_scaled + regularization_lambda * reg_val_G_sc * eye(N_chan);
 
-elseif strcmpi(blending_method, 'procrustes') && alpha > 0 && alpha < 1
-    % --- Procrustes-Aligned Eigenvalue Blending ---
-    % Eigendecompose both matrices
-    B_sub_reg = B_sub + 1e-10 * tr_B / N_chan * eye(N_chan);
-    G_scaled_reg = G_scaled + 1e-10 * tr_B / N_chan * eye(N_chan);
-    B_sub_reg = (B_sub_reg + B_sub_reg') / 2;
-    G_scaled_reg = (G_scaled_reg + G_scaled_reg') / 2;
-
-    [U_B, D_B] = eig(B_sub_reg);
-    [U_G, D_G] = eig(G_scaled_reg);
+elseif strcmpi(blending_method, 'procrustes')
+    % --- Eigenvalue-Weighted Orthogonal Procrustes Alignment (SO(N)) & Eigenvalue Blending ---
+    [U_B, D_B] = eig(B_sub);
+    [U_G, D_G] = eig(G_scaled);
     d_B = diag(D_B);
     d_G = diag(D_G);
-
-    % Sort both by descending eigenvalue for consistent axis ordering
     [d_B, idx_B] = sort(d_B, 'descend');
     U_B = U_B(:, idx_B);
     [d_G, idx_G] = sort(d_G, 'descend');
     U_G = U_G(:, idx_G);
 
-    % Orthogonal Procrustes: find rotation R that best aligns U_B to U_G
-    [U_svd, ~, V_svd] = svd(U_B' * U_G);
+    % Factor / Energy weighting: scale eigenvectors by square root of their eigenvalues
+    % This aligns high-power physiological modes while preventing noise axes from distorting the rotation
+    W_G = diag(sqrt(max(0, d_G)));
+    W_B = diag(sqrt(max(0, d_B)));
+    M_weighted = W_G * (U_G' * U_B) * W_B;
+
+    % Find optimal rigid rotation R in SO(N) weighted by dominant signal modes
+    [U_svd, ~, V_svd] = svd(M_weighted);
+    if det(U_svd * V_svd') < 0
+        V_svd(:, end) = -V_svd(:, end);
+    end
     R = U_svd * V_svd';
+    U_aligned = U_G * R; % Aligned eigenspace in subject coordinate frame
 
-    % Rotate subject eigenvectors into leadfield-aligned frame
-    U_aligned = U_B * R;
-
-    % Blend eigenvalues in the aligned coordinate system
-    d_B(d_B < 1e-12) = 1e-12;
-    d_G(d_G < 1e-12) = 1e-12;
+    % Blend eigenvalues along alpha
     d_blend = (1 - alpha) * d_B + alpha * d_G;
 
-    % Reconstruct blended matrix
+    % Reconstruct aligned reference matrix
     B_proc = U_aligned * diag(d_blend) * U_aligned';
+    B_proc = (B_proc + B_proc') / 2;
 
-    % Re-scale trace to guarantee strict scale conservation
+    % Scale matching and standardized isotropic shrinkage
     tr_proc = trace(B_proc);
     if tr_proc > 0 && tr_B > 0
         B_proc = B_proc * (tr_B / tr_proc);
     end
-    B_final = B_proc + gamma * eye(N_chan);
+    reg_val = trace(B_proc) / N_chan;
+    B_final = (1 - regularization_lambda) * B_proc + regularization_lambda * reg_val * eye(N_chan);
 
-elseif strcmpi(blending_method, 'riemannian') && alpha > 0 && alpha < 1
+elseif strcmpi(blending_method, 'linear')
+    % Convex linear blending between regularized B_sub and G_scaled
+    reg_val_B = tr_B / N_chan;
+    B_sub_spd = (1 - regularization_lambda) * B_sub + regularization_lambda * reg_val_B * eye(N_chan);
+    reg_val_G = trace(G_scaled) / N_chan;
+    G_spd = (1 - regularization_lambda) * G_scaled + regularization_lambda * reg_val_G * eye(N_chan);
+    B_final = (1 - alpha) * B_sub_spd + alpha * G_spd;
+
+else
     % --- Scale-Invariant Riemannian Geodesic Interpolation on SPD Manifold ---
-    G_reg_blend = G_scaled + 1e-8 * tr_B / N_chan * eye(N_chan);
-    G_reg_blend = (G_reg_blend + G_reg_blend') / 2;
+    reg_val_B = tr_B / N_chan;
+    B_sub_spd = (1 - regularization_lambda) * B_sub + regularization_lambda * reg_val_B * eye(N_chan);
+    B_sub_spd = (B_sub_spd + B_sub_spd') / 2;
 
-    [Vg, Dg] = eig(G_reg_blend);
+    reg_val_G = trace(G_scaled) / N_chan;
+    G_spd = (1 - regularization_lambda) * G_scaled + regularization_lambda * reg_val_G * eye(N_chan);
+    G_spd = (G_spd + G_spd') / 2;
+
+    [Vg, Dg] = eig(G_spd);
     dg = diag(Dg);
-    dg(dg < 1e-12) = 1e-12;
+    eps_g = max(dg) * 1e-12;
+    dg(dg < eps_g) = eps_g;
     G_sqrt = Vg * diag(sqrt(dg)) * Vg';
     G_inv_sqrt = Vg * diag(1 ./ sqrt(dg)) * Vg';
 
-    % Project B_sub onto G-tangent space
-    M_mid = G_inv_sqrt * B_sub * G_inv_sqrt;
+    M_mid = G_inv_sqrt * B_sub_spd * G_inv_sqrt;
     M_mid = (M_mid + M_mid') / 2;
 
     [Vm, Dm] = eig(M_mid);
     dm = diag(Dm);
-    dm(dm < 1e-12) = 1e-12;
+    eps_m = max(dm) * 1e-12;
+    dm(dm < eps_m) = eps_m;
 
-    % Geodesic step along SPD manifold
     M_mid_pow = Vm * diag(dm .^ (1 - alpha)) * Vm';
     B_riem = G_sqrt * M_mid_pow * G_sqrt;
 
-    % Re-scale trace to guarantee strict scale conservation
     tr_riem = trace(B_riem);
     if tr_riem > 0 && tr_B > 0
         B_riem = B_riem * (tr_B / tr_riem);
     end
-    B_final = B_riem + gamma * eye(N_chan);
-
-else
-    % --- Trace-Matched Linear Convex Blending ---
-    B_final = (1 - alpha) * B_sub + alpha * G_scaled + gamma * eye(N_chan);
+    B_final = B_riem;
 end
 
 % Ensure matrix is real and symmetric

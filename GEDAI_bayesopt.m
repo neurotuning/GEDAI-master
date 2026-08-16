@@ -65,7 +65,10 @@ addParameter(p, 'parallel', true, @islogical);
 addParameter(p, 'visualize', false, @islogical);
 addParameter(p, 'denoising_range', [1, 9], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'epoch_cycles_range', [2, 20], @(x) isnumeric(x) && numel(x) == 2);
+addParameter(p, 'gamma_range', [1e-8, 1e-1], @(x) isnumeric(x) && numel(x) == 2);
+addParameter(p, 'alpha_range', [0, 1], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'smoothing_window_seconds', Inf, @isnumeric);
+addParameter(p, 'blending_method', 'procrustes', @(x) ischar(x) || isstring(x));
 addParameter(p, 'default_denoising', 7, @isnumeric);
 addParameter(p, 'default_epoch_cycles', 12, @isnumeric);
 addParameter(p, 'verbose', 0, @isnumeric);
@@ -76,12 +79,17 @@ opts = p.Results;
 max_evals = opts.max_evals;
 num_seed_points = opts.num_seed_points;
 signal_type = char(opts.signal_type);
+is_subject_adapted = ischar(opts.ref_matrix_type) && strcmp(opts.ref_matrix_type, 'subject_adapted');
 
-%% 2. Define Optimization Variables (2 Hyperparameters)
-vars = [
-    optimizableVariable('denoising_strength', opts.denoising_range, 'Type', 'real')
-    optimizableVariable('epoch_size_in_cycles', opts.epoch_cycles_range, 'Type', 'integer')
-];
+%% 2. Define Optimization Variables (1 or 2 Hyperparameters)
+if is_subject_adapted
+    vars = optimizableVariable('subject_adapted_alpha', opts.alpha_range, 'Type', 'real');
+else
+    vars = [
+        optimizableVariable('denoising_strength', opts.denoising_range, 'Type', 'real')
+        optimizableVariable('epoch_size_in_cycles', opts.epoch_cycles_range, 'Type', 'integer')
+    ];
+end
 
 %% 3. Initialize Optimization State & Realtime Visualization Setup
 state = struct();
@@ -96,6 +104,8 @@ state.best_thresholds = [];
 state.best_EEGclean = [];
 state.best_band_labels = {};
 state.fig = [];
+state.G_base = [];
+state.G_full = [];
 
 if opts.visualize
     state.fig = create_realtime_figure(max_evals);
@@ -106,15 +116,34 @@ end
         state.eval_count = state.eval_count + 1;
         eval_idx = state.eval_count;
         
-        d_strength = X.denoising_strength;
-        epoch_cycles = round(X.epoch_size_in_cycles);
+        if is_subject_adapted
+            d_strength = opts.default_denoising;
+            alpha_val = X.subject_adapted_alpha;
+            epoch_cycles = opts.default_epoch_cycles;
+            gedai_extra = struct('subject_adapted_alpha', alpha_val, ...
+                                 'regularization_lambda', 0.05, ...
+                                 'blending_method', opts.blending_method, ...
+                                 'G_base', state.G_base, ...
+                                 'G_full', state.G_full, ...
+                                 'silent', true);
+        else
+            d_strength = X.denoising_strength;
+            epoch_cycles = round(X.epoch_size_in_cycles);
+            gedai_extra = struct('silent', true);
+        end
         win_sec_eval = opts.smoothing_window_seconds;
         
         try
             [EEGclean, EEGartifacts, sensai_val, ~, artifact_thresh_band, mean_enova, ~] = ...
                 GEDAI(EEGin, d_strength, epoch_cycles, opts.lowcut_frequency, ...
                       opts.ref_matrix_type, opts.parallel, false, inf, inf, ...
-                      signal_type, win_sec_eval, struct('silent', true));
+                      signal_type, win_sec_eval, gedai_extra);
+            
+            % Cache leadfield Gram matrix on first successful evaluation for fast reuse
+            if is_subject_adapted && isempty(state.G_base) && isstruct(EEGclean) && isfield(EEGclean, 'etc') && isfield(EEGclean.etc, 'GEDAI')
+                if isfield(EEGclean.etc.GEDAI, 'G_base'), state.G_base = EEGclean.etc.GEDAI.G_base; end
+                if isfield(EEGclean.etc.GEDAI, 'G_full'), state.G_full = EEGclean.etc.GEDAI.G_full; end
+            end
             
             sensai_score = sensai_val;
             if isnan(sensai_score) || isinf(sensai_score)
@@ -142,10 +171,17 @@ end
         if sensai_score > state.best_score
             state.best_score = sensai_score;
             state.best_eval_idx = eval_idx;
-            state.best_params = struct(...
-                'denoising_strength', d_strength, ...
-                'epoch_size_in_cycles', epoch_cycles, ...
-                'SENSAI_score', sensai_score);
+            if is_subject_adapted
+                state.best_params = struct(...
+                    'denoising_strength', d_strength, ...
+                    'subject_adapted_alpha', alpha_val, ...
+                    'SENSAI_score', sensai_score);
+            else
+                state.best_params = struct(...
+                    'denoising_strength', d_strength, ...
+                    'epoch_size_in_cycles', epoch_cycles, ...
+                    'SENSAI_score', sensai_score);
+            end
             state.best_thresholds = artifact_thresh_band;
             state.best_EEGclean = EEGclean;
             
@@ -190,9 +226,13 @@ end
         end
     end
 
-%% 5. Run Bayesian Optimization (Cold-started with default parameters as Evaluation #1)
-initial_point = table(opts.default_denoising, opts.default_epoch_cycles, ...
-    'VariableNames', {'denoising_strength', 'epoch_size_in_cycles'});
+%% 5. Run Bayesian Optimization (Warm-started with alpha=1.0 pure leadfield baseline as Evaluation #1)
+if is_subject_adapted
+    initial_point = table(1.0, 'VariableNames', {'subject_adapted_alpha'});
+else
+    initial_point = table(opts.default_denoising, opts.default_epoch_cycles, ...
+        'VariableNames', {'denoising_strength', 'epoch_size_in_cycles'});
+end
 
 results = bayesopt(@objective_func, vars, ...
     'MaxObjectiveEvaluations', max_evals, ...
@@ -202,33 +242,81 @@ results = bayesopt(@objective_func, vars, ...
     'Verbose', opts.verbose);
 
 %% 6. Compile Final Outputs & Render Final Artifact Visualization
-if isfield(results, 'XAtMinObjective') && ~isempty(results.XAtMinObjective)
-    d_opt = results.XAtMinObjective.denoising_strength;
-    c_opt = round(results.XAtMinObjective.epoch_size_in_cycles);
-elseif isfield(state.best_params, 'denoising_strength')
-    d_opt = state.best_params.denoising_strength;
-    c_opt = round(state.best_params.epoch_size_in_cycles);
+if is_subject_adapted
+    if isfield(results, 'XAtMinObjective') && ~isempty(results.XAtMinObjective)
+        a_opt = results.XAtMinObjective.subject_adapted_alpha;
+    elseif isfield(state.best_params, 'subject_adapted_alpha')
+        a_opt = state.best_params.subject_adapted_alpha;
+    else
+        a_opt = 1.0;
+    end
+    d_opt = opts.default_denoising;
+    c_opt = opts.default_epoch_cycles;
+
+    [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = ...
+        GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
+        opts.ref_matrix_type, opts.parallel, opts.visualize, inf, inf, signal_type, opts.smoothing_window_seconds, ...
+        struct('subject_adapted_alpha', a_opt, 'regularization_lambda', 0.05, 'blending_method', opts.blending_method, 'silent', true));
+
+    best_params = struct(...
+        'denoising_strength', d_opt, ...
+        'subject_adapted_alpha', a_opt, ...
+        'blending_method', opts.blending_method, ...
+        'SENSAI_score', SENSAI_score);
 else
-    d_opt = 3;
-    c_opt = 12;
+    if isfield(results, 'XAtMinObjective') && ~isempty(results.XAtMinObjective)
+        d_opt = results.XAtMinObjective.denoising_strength;
+        c_opt = round(results.XAtMinObjective.epoch_size_in_cycles);
+    elseif isfield(state.best_params, 'denoising_strength')
+        d_opt = state.best_params.denoising_strength;
+        c_opt = round(state.best_params.epoch_size_in_cycles);
+    else
+        d_opt = 3;
+        c_opt = 12;
+    end
+
+    % Perform final run using best parameters with artifact visualization enabled
+    [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = ...
+        GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
+        opts.ref_matrix_type, opts.parallel, opts.visualize, inf, inf, signal_type, opts.smoothing_window_seconds, struct('silent', true));
+
+    best_params = struct(...
+        'denoising_strength', d_opt, ...
+        'epoch_size_in_cycles', c_opt, ...
+        'SENSAI_score', SENSAI_score);
 end
-
-w_opt = opts.smoothing_window_seconds;
-
-% Perform final run using best parameters with artifact visualization enabled
-[EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = ...
-    GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
-    opts.ref_matrix_type, opts.parallel, opts.visualize, inf, inf, signal_type, w_opt, struct('silent', true));
-
-best_params = struct(...
-    'denoising_strength', d_opt, ...
-    'epoch_size_in_cycles', c_opt, ...
-    'SENSAI_score', SENSAI_score);
 
 if isstruct(EEGclean) && isfield(EEGclean, 'etc')
     EEGclean.etc.GEDAI.bayesopt_best_params = best_params;
     EEGclean.etc.GEDAI.bayesopt_results = results;
 end
+
+%% Print Final Optimal Settings Summary to Command Window
+disp([newline '==================================================']);
+disp('   GEDAI BAYESIAN OPTIMIZATION: OPTIMAL SETTINGS');
+disp('==================================================');
+fprintf('  Leadfield Model:       %s\n', opts.ref_matrix_type);
+fprintf('  Denoising Strength:    %.2f\n', d_opt);
+if is_subject_adapted
+    fprintf('  Blending Method:       %s\n', opts.blending_method);
+    fprintf('  Subject-Adapted Alpha: %.3f (%.1f%% empirical, %.1f%% leadfield)\n', ...
+        a_opt, (1 - a_opt) * 100, a_opt * 100);
+    fprintf('  Regularization Lambda: 0.05 (5%% isotropic shrinkage)\n');
+    fprintf('  Epoch Size in Cycles:  %d cycles\n', c_opt);
+else
+    fprintf('  Epoch Size in Cycles:  %d cycles\n', c_opt);
+end
+fprintf('  Low-Cut Frequency:     %.2f Hz\n', opts.lowcut_frequency);
+if opts.smoothing_window_seconds ~= Inf
+    fprintf('  Sliding Window:        %.1f s\n', opts.smoothing_window_seconds);
+else
+    fprintf('  Sliding Window:        Disabled (Global)\n');
+end
+fprintf('  ----------------------------------------------\n');
+fprintf('  Optimal SENSAI Score:  %.2f %%\n', SENSAI_score);
+fprintf('  Mean ENOVA:            %.2f %%\n', mean_ENOVA * 100);
+fprintf('  Total Evaluations:     %d\n', state.eval_count);
+disp(['==================================================' newline]);
 
 end
 
@@ -329,30 +417,43 @@ function update_realtime_figure(state)
              'GridColor', [0.25 0.25 0.32], 'GridAlpha', 0.5, 'Box', 'on');
          
     if ~isempty(fieldnames(state.best_params))
-        d_val = state.best_params.denoising_strength;
-        c_val = round(state.best_params.epoch_size_in_cycles);
-        
-        bar_heights = [d_val, c_val];
-        
-        hb = bar(ax2, 1:2, bar_heights, 0.4, 'FaceColor', 'flat');
-        
-        colors = [
-            0.22  0.45  0.75;   % Denoising Strength (Blue)
-            0.55  0.30  0.65    % Epoch Cycles (Purple)
-        ];
-        for b_idx = 1:2
-            hb.CData(b_idx, :) = colors(b_idx, :);
+        if isfield(state.best_params, 'subject_adapted_alpha')
+            a_val = state.best_params.subject_adapted_alpha;
+            hb = bar(ax2, 1, a_val, 0.35, 'FaceColor', [0.22 0.45 0.75]);
+            lbl = sprintf('Alpha = %.3f\n(%.1f%% Emp, %.1f%% Leadfield)', a_val, (1 - a_val) * 100, a_val * 100);
+            offset = 0.05;
+            text(ax2, 1, min(1.02, a_val + offset), lbl, ...
+                 'HorizontalAlignment', 'center', 'Color', [0.95 0.95 0.95], 'FontWeight', 'bold', 'FontSize', 10);
+            set(ax2, 'XTick', 1, 'XTickLabel', {'Subject Alpha'});
+            ylim(ax2, [0 1.18]);
+        else
+            d_val = state.best_params.denoising_strength;
+            c_val = round(state.best_params.epoch_size_in_cycles);
+            bar_heights = [d_val, c_val];
+            lbl1 = sprintf('%.1f', d_val);
+            lbl2 = sprintf('%d', c_val);
+            xticklabels_str = {'Denoising Strength', 'Epoch Cycles'};
+            ylim_max = max(22, max(bar_heights) * 1.2);
+            ylim_min = 0;
+            
+            hb = bar(ax2, 1:2, bar_heights, 0.4, 'FaceColor', 'flat');
+            colors = [
+                0.22  0.45  0.75;   % Parameter 1 (Blue)
+                0.55  0.30  0.65    % Parameter 2 (Purple)
+            ];
+            for b_idx = 1:2
+                hb.CData(b_idx, :) = colors(b_idx, :);
+            end
+            
+            offset = max(0.4, abs(max(bar_heights)) * 0.04);
+            text(ax2, 1, bar_heights(1) + offset, lbl1, ...
+                 'HorizontalAlignment', 'center', 'Color', [0.95 0.95 0.95], 'FontWeight', 'bold', 'FontSize', 10);
+            text(ax2, 2, bar_heights(2) + offset, lbl2, ...
+                 'HorizontalAlignment', 'center', 'Color', [0.95 0.95 0.95], 'FontWeight', 'bold', 'FontSize', 10);
+            
+            set(ax2, 'XTick', 1:2, 'XTickLabel', xticklabels_str);
+            ylim(ax2, [ylim_min, ylim_max]);
         end
-        
-        offset = max(0.8, max(bar_heights) * 0.04);
-        text(ax2, 1, d_val + offset, sprintf('%.1f', d_val), ...
-             'HorizontalAlignment', 'center', 'Color', [0.95 0.95 0.95], 'FontWeight', 'bold', 'FontSize', 10);
-        text(ax2, 2, c_val + offset, sprintf('%d', c_val), ...
-             'HorizontalAlignment', 'center', 'Color', [0.95 0.95 0.95], 'FontWeight', 'bold', 'FontSize', 10);
-        
-        set(ax2, 'XTick', 1:2, 'XTickLabel', {'Denoising Strength', 'Epoch Cycles'});
-        max_h = max(bar_heights);
-        ylim(ax2, [0 max(22, max_h * 1.2)]);
     else
         ylim(ax2, [0 22]);
         set(ax2, 'XTick', 1:2, 'XTickLabel', {'Denoising Strength', 'Epoch Cycles'});

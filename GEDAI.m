@@ -162,6 +162,9 @@ num_channels_rejected = 0;
 total_original_channels = size(EEGin.data, 1);
 
 optimization_type = 'parabolic';
+G_base_cached = [];
+G_full_cached = [];
+skip_highpass = false;
 if ~isempty(varargin)
     for vargIdx = 1:length(varargin)
         currentArg = varargin{vargIdx};
@@ -179,6 +182,21 @@ if ~isempty(varargin)
             end
             if isfield(currentArg, 'subject_adapted_alpha')
                 subject_adapted_alpha = currentArg.subject_adapted_alpha;
+            end
+            if isfield(currentArg, 'regularization_lambda')
+                regularization_lambda = currentArg.regularization_lambda;
+            end
+            if isfield(currentArg, 'blending_method')
+                blending_method = currentArg.blending_method;
+            end
+            if isfield(currentArg, 'G_base')
+                G_base_cached = currentArg.G_base;
+            end
+            if isfield(currentArg, 'G_full')
+                G_full_cached = currentArg.G_full;
+            end
+            if isfield(currentArg, 'skip_highpass')
+                skip_highpass = currentArg.skip_highpass;
             end
         end
     end
@@ -204,6 +222,12 @@ if nargin < 11 || isempty(smoothing_window_seconds)
 end
 if ~exist('subject_adapted_alpha', 'var') || isempty(subject_adapted_alpha)
     subject_adapted_alpha = 0.5; % default alpha for subject_adapted blending
+end
+if ~exist('regularization_lambda', 'var') || isempty(regularization_lambda)
+    regularization_lambda = 0.05; % standard 5% isotropic shrinkage
+end
+if ~exist('blending_method', 'var') || isempty(blending_method)
+    blending_method = 'procrustes'; % default subject adaptation blending method
 end
 % Validate signal_type
 if ~ismember(lower(signal_type), {'eeg', 'meg'})
@@ -454,7 +478,7 @@ if ENOVA_threshold_per_channel < inf
             end
             
             % Create refCOV for full channel space
-            refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference);
+            refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference, subject_adapted_alpha, subject_adapted_gamma);
             
             if ~isempty(refCOV_full)
                 if strcmpi(signal_type, 'meg'), vis_pcs = 4; else, vis_pcs = 3; end
@@ -583,7 +607,13 @@ end
 
 
 %% Create Reference Covariance Matrix (refCOV)
-[refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+if ~isempty(G_base_cached) && ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
+    G_base = G_base_cached;
+    G_full = G_full_cached;
+    refCOV = GEDAI_create_subject_refCOV(EEG_av, [], G_base, subject_adapted_alpha, regularization_lambda, 3, EEG_av.srate, 1, blending_method);
+else
+    [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method);
+end
 
 if strcmp(internal_reference, 'REST')
     EEGavRef = EEG_av;
@@ -597,23 +627,24 @@ else
 end
 
 % --- Wavelet-based High-Pass Filtering ---
-% Calculate required level to resolve lowcut_frequency
-highpass_frequency=0.1;
-hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
-% Limit to maximum possible level given data length
-max_possible_level = floor(log2(size(EEGavRef.data, 2)));
-hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
-% Ensure reasonable minimum
-hp_wavelet_levels = max(hp_wavelet_levels, 3);
-wavelet_type = 'haar';
+if ~skip_highpass
+    % Calculate required level to resolve lowcut_frequency
+    highpass_frequency=0.1;
+    hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
+    % Limit to maximum possible level given data length
+    max_possible_level = floor(log2(size(EEGavRef.data, 2)));
+    hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
+    % Ensure reasonable minimum
+    hp_wavelet_levels = max(hp_wavelet_levels, 3);
+    wavelet_type = 'haar';
 
-% Identify wavelet bands to remove based on lowcut_frequency
-srate = EEGavRef.srate;
-num_bands_hp = hp_wavelet_levels + 1;
-upper_bounds = srate ./ (2.^(1:num_bands_hp));
-bands_to_zero = find(upper_bounds <= lowcut_frequency);
+    % Identify wavelet bands to remove based on lowcut_frequency
+    srate = EEGavRef.srate;
+    num_bands_hp = hp_wavelet_levels + 1;
+    upper_bounds = srate ./ (2.^(1:num_bands_hp));
+    bands_to_zero = find(upper_bounds <= lowcut_frequency);
 
-if ~isempty(bands_to_zero)
+    if ~isempty(bands_to_zero)
     % Robust execution order: GPU(Double) -> GPU(Single) -> CPU(Double) -> CPU(Single)
     success = false;
     warning('off');
@@ -680,6 +711,7 @@ if ~isempty(bands_to_zero)
             clear data_cpu low_freq_noise;
         end
     end
+    end
 end
 
     %% ------------------ GEDAI Broadband------------------------------
@@ -707,11 +739,7 @@ end
     broadband_artifact_threshold_type = artifact_threshold_type;
     broadband_minThreshold = -4;
     broadband_maxThreshold = 12;
-    if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
-        broadband_refCOV = GEDAI_create_subject_refCOV(double(EEGavRef.data), [], G_base, subject_adapted_alpha, 1e-6, 3, EEGavRef.srate, broadband_epoch_size);
-    else
-        broadband_refCOV = refCOV;
-    end
+    broadband_refCOV = refCOV;
     [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, broadband_refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
@@ -847,11 +875,7 @@ if parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
 
-            if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
-                refCOV_band = GEDAI_create_subject_refCOV(wavelet_data_band, [], G_base, subject_adapted_alpha, 1e-6, 3, srate, current_epoch_size);
-            else
-                refCOV_band = refCOV;
-            end
+            refCOV_band = refCOV;
 
             try
                  [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
@@ -893,12 +917,7 @@ if ~parallel || ~success_parallel
             
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
-            
-            if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
-                refCOV_band = GEDAI_create_subject_refCOV(wavelet_data_band, [], G_base, subject_adapted_alpha, 1e-6, 3, srate, current_epoch_size);
-            else
-                refCOV_band = refCOV;
-            end
+            refCOV_band = refCOV;
 
             try
              disp(['processing wavelet band = ' num2str(f)])   
@@ -932,12 +951,7 @@ if ~parallel || ~success_parallel
             wavelet_data_band = stateful_modwt_single_band(unfiltered_data_single, wavelet_type, actual_decomposition_level, f)';
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
-            
-            if ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
-                refCOV_band = GEDAI_create_subject_refCOV(wavelet_data_band, [], G_base, subject_adapted_alpha, 1e-6, 3, srate, current_epoch_size);
-            else
-                refCOV_band = refCOV;
-            end
+            refCOV_band = refCOV;
 
             [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             disp(['processing wavelet band (single) = ' num2str(f)])
@@ -1319,6 +1333,8 @@ EEGclean.etc.GEDAI.ENOVA_per_channel = ENOVA_per_channel;
 EEGclean.etc.GEDAI.epochs_rejected = num_rejected;
 EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
+if exist('G_base', 'var') && ~isempty(G_base), EEGclean.etc.GEDAI.G_base = G_base; end
+if exist('G_full', 'var') && ~isempty(G_full), EEGclean.etc.GEDAI.G_full = G_full; end
 if exist('samples_to_keep', 'var')
     EEGclean.etc.GEDAI.samples_to_keep = samples_to_keep;
 else
@@ -1474,9 +1490,18 @@ for chIdx = 1:EEG.nbchan
 end
 end
 
-function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef, signal_type, internal_reference)
-    if nargin < 5
+function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method)
+    if nargin < 5 || isempty(internal_reference)
         internal_reference = 'AvgRef';
+    end
+    if nargin < 6 || isempty(subject_adapted_alpha)
+        subject_adapted_alpha = 0.5;
+    end
+    if nargin < 7 || isempty(regularization_lambda)
+        regularization_lambda = 0.05;
+    end
+    if nargin < 8 || isempty(blending_method)
+        blending_method = 'procrustes';
     end
     G_full = [];
     G_base = [];
@@ -1488,8 +1513,8 @@ function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, 
         switch ref_matrix_type
             case 'subject_adapted'
                 disp([newline 'GEDAI Leadfield model: Subject-adapted (100% empirical patterns from top 3 signal components per epoch)']);
-                [G_base, G_full] = GEDAI_create_refCOV('precomputed', EEGin, EEGavRef, signal_type, internal_reference);
-                refCOV = GEDAI_create_subject_refCOV(EEGavRef, [], G_base, 0.5, 1e-6, 3, EEGavRef.srate, 1);
+                [G_base, G_full] = GEDAI_create_refCOV('precomputed', EEGin, EEGavRef, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method);
+                refCOV = GEDAI_create_subject_refCOV(EEGavRef, [], G_base, subject_adapted_alpha, regularization_lambda, 3, EEGavRef.srate, 1, blending_method);
 
             case 'precomputed'
                 if strcmp(internal_reference, 'REST')
@@ -1539,8 +1564,8 @@ function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, 
             case 'interpolated'
                 % 1. Verification of Spatial Locations
                 num_chans = length(EEGavRef.chanlocs);
-                has_cartesian = length([EEGavRef.chanlocs.X]) == num_chans;
-                has_spherical = length([EEGavRef.chanlocs.theta]) == num_chans;
+                has_cartesian = isfield(EEGavRef.chanlocs, 'X') && ~any(cellfun(@isempty, {EEGavRef.chanlocs.X})) && length([EEGavRef.chanlocs.X]) == num_chans;
+                has_spherical = isfield(EEGavRef.chanlocs, 'theta') && ~any(cellfun(@isempty, {EEGavRef.chanlocs.theta})) && length([EEGavRef.chanlocs.theta]) == num_chans;
                 
                 if has_cartesian && has_spherical
                     % 2. Leadfield Processing
@@ -1575,8 +1600,8 @@ function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, 
             case 'warped'
                 % 1. Verification of Spatial Locations
                 num_chans = length(EEGavRef.chanlocs);
-                has_cartesian = length([EEGavRef.chanlocs.X]) == num_chans;
-                has_spherical = length([EEGavRef.chanlocs.theta]) == num_chans;
+                has_cartesian = isfield(EEGavRef.chanlocs, 'X') && ~any(cellfun(@isempty, {EEGavRef.chanlocs.X})) && length([EEGavRef.chanlocs.X]) == num_chans;
+                has_spherical = isfield(EEGavRef.chanlocs, 'theta') && ~any(cellfun(@isempty, {EEGavRef.chanlocs.theta})) && length([EEGavRef.chanlocs.theta]) == num_chans;
 
                 if has_cartesian && has_spherical
                     % 2. Leadfield Processing
