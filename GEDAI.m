@@ -165,6 +165,9 @@ optimization_type = 'parabolic';
 G_base_cached = [];
 G_full_cached = [];
 skip_highpass = false;
+subject_adapted_alpha = 0.5;
+regularization_lambda = 0.05;
+blending_method = 'gromov-wasserstein';
 if ~isempty(varargin)
     for vargIdx = 1:length(varargin)
         currentArg = varargin{vargIdx};
@@ -1501,7 +1504,7 @@ function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, 
         regularization_lambda = 0.05;
     end
     if nargin < 8 || isempty(blending_method)
-        blending_method = 'procrustes';
+        blending_method = 'gromov-wasserstein';
     end
     G_full = [];
     G_base = [];

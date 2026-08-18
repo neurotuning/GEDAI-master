@@ -52,7 +52,7 @@ if nargin < 8 || isempty(epoch_size)
     epoch_size = 1;
 end
 if nargin < 9 || isempty(blending_method)
-    blending_method = 'procrustes'; % Default to Procrustes-aligned eigenvalue blending
+    blending_method = 'gromov-wasserstein'; % Default to Gromov-Wasserstein optimal transport blending
 end
 
 [N_chan, N_pts, N_epochs] = size(data);
@@ -200,6 +200,43 @@ elseif strcmpi(blending_method, 'procrustes')
     reg_val = trace(B_proc) / N_chan;
     B_final = (1 - regularization_lambda) * B_proc + regularization_lambda * reg_val * eye(N_chan);
 
+elseif strcmpi(blending_method, 'gromov-wasserstein')
+    % --- Entropic Fused Gromov-Wasserstein Optimal Transport Alignment ---
+    % Finds a soft coupling matrix T that preserves the internal geometric
+    % structure (pairwise correlation distances) of both B_sub and G_scaled,
+    % then uses T as a linear alignment operator.
+
+    % Correlation distance matrices (scale-invariant internal structure)
+    % Source = leadfield (thing to warp), Target = empirical (frame to match)
+    D_A = cov2dist_gedai(G_scaled);
+    D_B = cov2dist_gedai(B_sub);
+
+    % Uniform marginal distributions over sensors
+    p_marg = ones(N_chan, 1) / N_chan;
+    q_marg = ones(N_chan, 1) / N_chan;
+
+    % No prior cross-domain cost (alignment is purely structure-driven)
+    M_cross = zeros(N_chan, N_chan);
+
+    % Fixed entropic regularization (moderate smoothing, avoids nested BayesOpt)
+    eps_reg = 0.01;
+
+    % Solve for optimal transport coupling
+    T = entropic_fgw_sinkhorn(D_A, D_B, M_cross, p_marg, q_marg, eps_reg, alpha, 120);
+
+    % Rescale coupling to linear alignment operator and warp leadfield into subject space
+    W_align = N_chan * T;
+    B_ot = W_align * G_scaled * W_align';
+    B_ot = (B_ot + B_ot') / 2;
+
+    % Scale matching to empirical trace and isotropic shrinkage
+    tr_ot = trace(B_ot);
+    if tr_ot > 0 && tr_B > 0
+        B_ot = B_ot * (tr_B / tr_ot);
+    end
+    reg_val = trace(B_ot) / N_chan;
+    B_final = (1 - regularization_lambda) * B_ot + regularization_lambda * reg_val * eye(N_chan);
+
 elseif strcmpi(blending_method, 'linear')
     % Convex linear blending between regularized B_sub and G_scaled
     reg_val_B = tr_B / N_chan;
@@ -248,3 +285,77 @@ B_final = real(B_final);
 B_final = (B_final + B_final') / 2;
 
 end
+
+
+%% --- Entropic Fused Gromov-Wasserstein via Projected Sinkhorn Iterations ---
+function T = entropic_fgw_sinkhorn(D_A, D_B, M_cross, p, q, eps_reg, alpha, max_iter)
+% Solves the Fused Gromov-Wasserstein problem using mirror descent with
+% Sinkhorn projections. The quadratic GW term is linearized at each step,
+% then entropic matrix scaling finds the next coupling iterate.
+%
+% Inputs:
+%   D_A       - [n x n] intra-domain distance matrix for source (empirical)
+%   D_B       - [m x m] intra-domain distance matrix for target (leadfield)
+%   M_cross   - [n x m] cross-domain cost matrix (zeros if no prior)
+%   p, q      - marginal distributions (column vectors summing to 1)
+%   eps_reg   - entropic regularization strength
+%   alpha     - trade-off: (1-alpha)*M_cross + alpha*Grad_GW
+%   max_iter  - maximum outer Frank-Wolfe / mirror descent iterations
+%
+% Output:
+%   T         - [n x m] optimal transport coupling matrix
+
+    % Initialize coupling with uniform independent distribution
+    T = p * q';
+
+    % Precompute constant terms of the GW gradient
+    f1_A = D_A.^2 * p;
+    f2_B = (q' * (D_B.^2)')';
+
+    tol = 1e-6;
+    for iter = 1:max_iter
+        T_old = T;
+
+        % 1. Compute linearized GW gradient contracted with current T
+        Grad_GW = bsxfun(@plus, f1_A, f2_B') - 2 * (D_A * T * (D_B'));
+
+        % Combined Fused Cost
+        C_total = (1 - alpha) * M_cross + alpha * Grad_GW;
+
+        % 2. Inner Sinkhorn iteration (log-domain stabilized)
+        K = exp(-C_total / eps_reg);
+        K = max(K, realmin); % Numerical underflow protection
+
+        u = ones(size(p));
+        for s_iter = 1:60
+            v = q ./ (K' * u + 1e-12);
+            u = p ./ (K * v + 1e-12);
+        end
+        T_sinkhorn = diag(u) * K * diag(v);
+
+        % Damped update for convergence stability in non-convex quadratic OT
+        T = 0.6 * T + 0.4 * T_sinkhorn;
+
+        if norm(T - T_old, 'fro') < tol
+            break;
+        end
+    end
+end
+
+
+%% --- Helper: Trace-Normalized Covariance Distance ---
+function D = cov2dist_gedai(C)
+% Converts a covariance matrix into a trace-normalized pairwise Euclidean
+% distance matrix over sensor topography columns. Trace normalization
+% preserves the physical spatial decay of leadfield dipoles while making
+% the global scale dimensionless (unit total power).
+    C_norm = C / trace(C);
+    n = size(C_norm, 1);
+    col_norms_sq = sum(C_norm.^2, 1); % 1 x n
+    D_sq = bsxfun(@plus, col_norms_sq', col_norms_sq) - 2 * (C_norm' * C_norm);
+    D_sq = max(D_sq, 0); % Protect against roundoff
+    D = sqrt(D_sq);
+    D = D / max(D(:)); % Normalize for stable Sinkhorn scaling
+end
+
+

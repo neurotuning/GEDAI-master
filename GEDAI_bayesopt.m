@@ -68,10 +68,13 @@ addParameter(p, 'epoch_cycles_range', [2, 20], @(x) isnumeric(x) && numel(x) == 
 addParameter(p, 'gamma_range', [1e-8, 1e-1], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'alpha_range', [0, 1], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'smoothing_window_seconds', Inf, @isnumeric);
-addParameter(p, 'blending_method', 'procrustes', @(x) ischar(x) || isstring(x));
+addParameter(p, 'blending_method', 'gromov-wasserstein', @(x) ischar(x) || isstring(x));
 addParameter(p, 'default_denoising', 7, @isnumeric);
 addParameter(p, 'default_epoch_cycles', 12, @isnumeric);
 addParameter(p, 'verbose', 0, @isnumeric);
+addParameter(p, 'ENOVA_threshold_per_channel', inf, @isnumeric);
+addParameter(p, 'ENOVA_threshold_per_epoch', inf, @isnumeric);
+addParameter(p, 'output_reference_channel', '', @(x) ischar(x) || isstring(x));
 
 parse(p, EEGin, varargin{:});
 opts = p.Results;
@@ -255,7 +258,7 @@ if is_subject_adapted
 
     [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = ...
         GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
-        opts.ref_matrix_type, opts.parallel, opts.visualize, inf, inf, signal_type, opts.smoothing_window_seconds, ...
+        opts.ref_matrix_type, opts.parallel, opts.visualize, opts.ENOVA_threshold_per_epoch, opts.ENOVA_threshold_per_channel, signal_type, opts.smoothing_window_seconds, opts.output_reference_channel, ...
         struct('subject_adapted_alpha', a_opt, 'regularization_lambda', 0.05, 'blending_method', opts.blending_method, 'silent', true));
 
     best_params = struct(...
@@ -278,7 +281,7 @@ else
     % Perform final run using best parameters with artifact visualization enabled
     [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel] = ...
         GEDAI(EEGin, d_opt, c_opt, opts.lowcut_frequency, ...
-        opts.ref_matrix_type, opts.parallel, opts.visualize, inf, inf, signal_type, opts.smoothing_window_seconds, struct('silent', true));
+        opts.ref_matrix_type, opts.parallel, opts.visualize, opts.ENOVA_threshold_per_epoch, opts.ENOVA_threshold_per_channel, signal_type, opts.smoothing_window_seconds, opts.output_reference_channel, struct('silent', true));
 
     best_params = struct(...
         'denoising_strength', d_opt, ...
@@ -313,6 +316,15 @@ else
     fprintf('  Sliding Window:        Disabled (Global)\n');
 end
 fprintf('  ----------------------------------------------\n');
+if opts.ENOVA_threshold_per_channel < inf
+    fprintf('  Bad Channel Threshold: %.0f%% ENOVA\n', opts.ENOVA_threshold_per_channel * 100);
+end
+if opts.ENOVA_threshold_per_epoch < inf
+    fprintf('  Bad Epoch Threshold:   %.0f%% ENOVA\n', opts.ENOVA_threshold_per_epoch * 100);
+end
+if ~isempty(opts.output_reference_channel)
+    fprintf('  Output Reference:      %s\n', opts.output_reference_channel);
+end
 fprintf('  Optimal SENSAI Score:  %.2f %%\n', SENSAI_score);
 fprintf('  Mean ENOVA:            %.2f %%\n', mean_ENOVA * 100);
 fprintf('  Total Evaluations:     %d\n', state.eval_count);
