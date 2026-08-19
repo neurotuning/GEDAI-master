@@ -164,10 +164,14 @@ total_original_channels = size(EEGin.data, 1);
 optimization_type = 'parabolic';
 G_base_cached = [];
 G_full_cached = [];
+A_clean_cached = [];
+A_clean_per_band_cached = {};
+resample_columns = false;
 skip_highpass = false;
 subject_adapted_alpha = 0.5;
 regularization_lambda = 0.05;
 blending_method = 'gromov-wasserstein';
+num_comp_per_epoch = 3;
 if ~isempty(varargin)
     for vargIdx = 1:length(varargin)
         currentArg = varargin{vargIdx};
@@ -192,11 +196,23 @@ if ~isempty(varargin)
             if isfield(currentArg, 'blending_method')
                 blending_method = currentArg.blending_method;
             end
+            if isfield(currentArg, 'num_comp_per_epoch')
+                num_comp_per_epoch = currentArg.num_comp_per_epoch;
+            end
             if isfield(currentArg, 'G_base')
                 G_base_cached = currentArg.G_base;
             end
             if isfield(currentArg, 'G_full')
                 G_full_cached = currentArg.G_full;
+            end
+            if isfield(currentArg, 'A_clean')
+                A_clean_cached = currentArg.A_clean;
+            end
+            if isfield(currentArg, 'A_clean_per_band')
+                A_clean_per_band_cached = currentArg.A_clean_per_band;
+            end
+            if isfield(currentArg, 'resample_columns')
+                resample_columns = currentArg.resample_columns;
             end
             if isfield(currentArg, 'skip_highpass')
                 skip_highpass = currentArg.skip_highpass;
@@ -230,7 +246,7 @@ if ~exist('regularization_lambda', 'var') || isempty(regularization_lambda)
     regularization_lambda = 0.05; % standard 5% isotropic shrinkage
 end
 if ~exist('blending_method', 'var') || isempty(blending_method)
-    blending_method = 'procrustes'; % default subject adaptation blending method
+    blending_method = 'gromov-wasserstein'; % default subject adaptation blending method ('gromov-wasserstein', 'grassmannian', 'oblique-procrustes', 'procrustes', 'riemannian', 'linear')
 end
 % Validate signal_type
 if ~ismember(lower(signal_type), {'eeg', 'meg'})
@@ -481,7 +497,7 @@ if ENOVA_threshold_per_channel < inf
             end
             
             % Create refCOV for full channel space
-            refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference, subject_adapted_alpha, subject_adapted_gamma);
+            refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method, resample_columns);
             
             if ~isempty(refCOV_full)
                 if strcmpi(signal_type, 'meg'), vis_pcs = 4; else, vis_pcs = 3; end
@@ -610,12 +626,22 @@ end
 
 
 %% Create Reference Covariance Matrix (refCOV)
+A_clean_out = [];
+clean_filters_in = [];
+if ~isempty(A_clean_cached)
+    if iscell(A_clean_cached)
+        clean_filters_in = struct('A_clean_cell', {A_clean_cached});
+    else
+        clean_filters_in = struct('A_clean', A_clean_cached);
+    end
+end
+
 if ~isempty(G_base_cached) && ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted')
     G_base = G_base_cached;
     G_full = G_full_cached;
-    refCOV = GEDAI_create_subject_refCOV(EEG_av, [], G_base, subject_adapted_alpha, regularization_lambda, 3, EEG_av.srate, 1, blending_method);
+    [refCOV, ~, A_clean_out] = GEDAI_create_subject_refCOV(EEG_av, clean_filters_in, G_base, subject_adapted_alpha, regularization_lambda, num_comp_per_epoch, EEG_av.srate, 1, blending_method, resample_columns);
 else
-    [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method);
+    [refCOV, G_full, G_base, A_clean_out] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method, resample_columns, clean_filters_in, num_comp_per_epoch);
 end
 
 if strcmp(internal_reference, 'REST')
@@ -863,6 +889,50 @@ band_min_thresholds = zeros(1, num_bands_to_process);
 band_min_thresholds(center_frequencies(1:num_bands_to_process) >= lowcut_frequency & center_frequencies(1:num_bands_to_process) <= 60) = -6;
 success_parallel = false;
 
+% --- Per-band refCOV computation (Option A: band-filtered GEVD patterns) ---
+is_subject_adapted = ischar(ref_matrix_type) && strcmp(ref_matrix_type, 'subject_adapted');
+refCOV_per_band = cell(1, num_bands_to_process);
+A_clean_per_band_out = cell(1, num_bands_to_process);
+if is_subject_adapted && ~isempty(G_base)
+    disp([newline 'Computing per-band reference covariance matrices...']);
+    for f = 1:num_bands_to_process
+        if center_frequencies(f) >= lowcut_frequency
+            % Extract this wavelet band from the broadband-cleaned data
+            band_data_for_refcov = stateful_modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
+            % Build temporary EEG struct for this band
+            EEG_band_ref = EEGavRef;
+            EEG_band_ref.data = band_data_for_refcov;
+            EEG_band_ref.pnts = size(band_data_for_refcov, 2);
+            % Prepare cached patterns for this band if available
+            clean_filt_band = [];
+            if ~isempty(A_clean_per_band_cached) && length(A_clean_per_band_cached) >= f && ~isempty(A_clean_per_band_cached{f})
+                if iscell(A_clean_per_band_cached{f})
+                    clean_filt_band = struct('A_clean_cell', {A_clean_per_band_cached{f}});
+                else
+                    clean_filt_band = struct('A_clean', A_clean_per_band_cached{f});
+                end
+            end
+            % Compute band-specific refCOV using same G_base, alpha, and num_comp_per_epoch
+            band_epoch_sec = epoch_sizes_per_wavelet_band(f);
+            [refCOV_per_band{f}, ~, A_clean_per_band_out{f}] = GEDAI_create_subject_refCOV(...
+                EEG_band_ref, clean_filt_band, G_base, subject_adapted_alpha, ...
+                regularization_lambda, num_comp_per_epoch, srate, ...
+                band_epoch_sec, blending_method, resample_columns);
+            disp(['  Band ' num2str(f) ' (' num2str(center_frequencies(f), '%.1f') ' Hz): per-band refCOV computed']);
+            clear band_data_for_refcov EEG_band_ref;
+        else
+            % Low-frequency band: fall back to broadband refCOV
+            refCOV_per_band{f} = refCOV;
+            disp(['  Band ' num2str(f) ' (' num2str(center_frequencies(f), '%.1f') ' Hz): using broadband refCOV (below lowcut)']);
+        end
+    end
+else
+    % Non-subject-adapted or no G_base: use broadband refCOV for all bands
+    for f = 1:num_bands_to_process
+        refCOV_per_band{f} = refCOV;
+    end
+end
+
 if parallel
     try
         temp_sensai_scores = zeros(1, num_bands_to_process);
@@ -878,7 +948,7 @@ if parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
 
-            refCOV_band = refCOV;
+            refCOV_band = refCOV_per_band{f};
 
             try
                  [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
@@ -920,7 +990,7 @@ if ~parallel || ~success_parallel
             
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
-            refCOV_band = refCOV;
+            refCOV_band = refCOV_per_band{f};
 
             try
              disp(['processing wavelet band = ' num2str(f)])   
@@ -954,7 +1024,7 @@ if ~parallel || ~success_parallel
             wavelet_data_band = stateful_modwt_single_band(unfiltered_data_single, wavelet_type, actual_decomposition_level, f)';
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
-            refCOV_band = refCOV;
+            refCOV_band = refCOV_per_band{f};
 
             [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV_band, optimization_type, false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             disp(['processing wavelet band (single) = ' num2str(f)])
@@ -1338,6 +1408,10 @@ EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
 if exist('G_base', 'var') && ~isempty(G_base), EEGclean.etc.GEDAI.G_base = G_base; end
 if exist('G_full', 'var') && ~isempty(G_full), EEGclean.etc.GEDAI.G_full = G_full; end
+if exist('A_clean_out', 'var') && ~isempty(A_clean_out), EEGclean.etc.GEDAI.A_clean = A_clean_out; end
+if exist('A_clean_per_band_out', 'var') && ~isempty(A_clean_per_band_out) && any(~cellfun('isempty', A_clean_per_band_out))
+    EEGclean.etc.GEDAI.A_clean_per_band = A_clean_per_band_out;
+end
 if exist('samples_to_keep', 'var')
     EEGclean.etc.GEDAI.samples_to_keep = samples_to_keep;
 else
@@ -1493,7 +1567,7 @@ for chIdx = 1:EEG.nbchan
 end
 end
 
-function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method)
+function [refCOV, G_full, G_base, A_clean] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method, resample_columns, clean_filters_in, num_comp_per_epoch)
     if nargin < 5 || isempty(internal_reference)
         internal_reference = 'AvgRef';
     end
@@ -1506,8 +1580,18 @@ function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, 
     if nargin < 8 || isempty(blending_method)
         blending_method = 'gromov-wasserstein';
     end
+    if nargin < 9
+        resample_columns = false;
+    end
+    if nargin < 10
+        clean_filters_in = [];
+    end
+    if nargin < 11 || isempty(num_comp_per_epoch)
+        num_comp_per_epoch = 3;
+    end
     G_full = [];
     G_base = [];
+    A_clean = [];
     if ~ischar(ref_matrix_type)
         refCOV = ref_matrix_type; % Use custom covariance matrix
         G_base = ref_matrix_type;
@@ -1515,9 +1599,9 @@ function [refCOV, G_full, G_base] = GEDAI_create_refCOV(ref_matrix_type, EEGin, 
     else
         switch ref_matrix_type
             case 'subject_adapted'
-                disp([newline 'GEDAI Leadfield model: Subject-adapted (100% empirical patterns from top 3 signal components per epoch)']);
+                disp([newline sprintf('GEDAI Leadfield model: Subject-adapted (%d components per epoch)', num_comp_per_epoch)]);
                 [G_base, G_full] = GEDAI_create_refCOV('precomputed', EEGin, EEGavRef, signal_type, internal_reference, subject_adapted_alpha, regularization_lambda, blending_method);
-                refCOV = GEDAI_create_subject_refCOV(EEGavRef, [], G_base, subject_adapted_alpha, regularization_lambda, 3, EEGavRef.srate, 1, blending_method);
+                [refCOV, ~, A_clean] = GEDAI_create_subject_refCOV(EEGavRef, clean_filters_in, G_base, subject_adapted_alpha, regularization_lambda, num_comp_per_epoch, EEGavRef.srate, 1, blending_method, resample_columns);
 
             case 'precomputed'
                 if strcmp(internal_reference, 'REST')

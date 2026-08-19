@@ -19,6 +19,9 @@ function varargout = process_gedai( varargin )
 %
 % Authors: Tomas Ros, Center for Biomedical Imaging (CIBM), University of Geneva, 2025
 
+if ~exist('macro_method', 'var')
+    macro_method = 'if (nargin == 0); return; end; [varargout{1:nargout}] = feval(str2func(varargin{1}), varargin{2:end});';
+end
 eval(macro_method);
 end
 
@@ -55,10 +58,37 @@ function sProcess = GetDescription() %#ok<DEFNU>
     % === Reference matrix type
     sProcess.options.label2.Comment = '<B>Leadfield matrix</B>';
     sProcess.options.label2.Type    = 'label';
-    sProcess.options.ref_matrix_type.Comment = {'Freesurfer precomputed (for standard EEG electrode locations)', 'Freesurfer interpolated (for non-standard EEG electrode locations)', 'Brainstorm headmodel (custom for M/EEG)'; ...
-                                                'fs_precomputed', 'fs_interpolated', 'bst_headmodel'};
+    sProcess.options.ref_matrix_type.Comment = {'Subject-adapted (empirical + leadfield prior)', 'Brainstorm headmodel (custom for M/EEG)', 'Freesurfer precomputed (for standard EEG electrode locations)', 'Freesurfer interpolated (for non-standard EEG electrode locations)'; ...
+                                                'subject_adapted', 'bst_headmodel', 'fs_precomputed', 'fs_interpolated'};
     sProcess.options.ref_matrix_type.Type    = 'radio_label';
-    sProcess.options.ref_matrix_type.Value   = 'bst_headmodel';
+    sProcess.options.ref_matrix_type.Value   = 'subject_adapted';
+    % === Subject-adapted blending method
+    sProcess.options.blending_method.Comment = {'Gromov-Wasserstein &nbsp', 'Grassmannian &nbsp', 'Oblique-Procrustes &nbsp', 'Procrustes &nbsp', 'Riemannian &nbsp', 'Linear &nbsp', ''; ...
+                                                'gromov-wasserstein', 'grassmannian', 'oblique-procrustes', 'procrustes', 'riemannian', 'linear', ''};
+    sProcess.options.blending_method.Type    = 'radio_linelabel';
+    sProcess.options.blending_method.Value   = 'gromov-wasserstein';
+    % === Subject-adapted alpha (when BayesOpt is disabled)
+    sProcess.options.subject_adapted_alpha.Comment = 'Subject-adapted alpha (0=empirical, 1=leadfield)';
+    sProcess.options.subject_adapted_alpha.Type    = 'value';
+    sProcess.options.subject_adapted_alpha.Value   = {0.5, '', 2};
+    sProcess.options.num_comp_per_epoch.Comment   = 'Components per epoch (when BayesOpt disabled)';
+    sProcess.options.num_comp_per_epoch.Type      = 'value';
+    sProcess.options.num_comp_per_epoch.Value     = {3, 'comps', 0};
+    % === Bayesian Optimization
+    sProcess.options.label_bayesopt.Comment = '<B>Outer Loop Optimization</B>';
+    sProcess.options.label_bayesopt.Type    = 'label';
+    sProcess.options.run_bayesopt.Comment   = 'Run Bayesian Optimization (bayesopt)';
+    sProcess.options.run_bayesopt.Type      = 'checkbox';
+    sProcess.options.run_bayesopt.Value     = 1;
+    sProcess.options.run_bayesopt.Controller = 'bayesopt';
+    sProcess.options.bayesopt_max_evals.Comment = 'Bayesopt Max Evaluations';
+    sProcess.options.bayesopt_max_evals.Type    = 'value';
+    sProcess.options.bayesopt_max_evals.Value   = {20, 'evals', 0};
+    sProcess.options.bayesopt_max_evals.Class   = 'bayesopt';
+    sProcess.options.resampling.Comment         = 'Resample empirical columns (1x N_chan per eval)';
+    sProcess.options.resampling.Type            = 'checkbox';
+    sProcess.options.resampling.Value           = 1;
+    sProcess.options.resampling.Class           = 'bayesopt';
     % === Parallel processing
     sProcess.options.label3.Comment   = '<BR>';
     sProcess.options.label3.Type      = 'label';
@@ -101,21 +131,53 @@ end
 
 
 %% ===== GET OPTIONS =====
-function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts] = GetOptions(sProcess)
+function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts, run_bayesopt, bayesopt_max_evals, subject_adapted_alpha, blending_method, resampling, num_comp_per_epoch] = GetOptions(sProcess)
     artifact_threshold_type = sProcess.options.artifact_threshold_type.Value;
     epoch_size_in_cycles    = sProcess.options.epoch_size_in_cycles.Value{1};
     lowcut_frequency        = sProcess.options.lowcut_frequency.Value{1};
     switch sProcess.options.ref_matrix_type.Value
+        case 'subject_adapted', ref_matrix_type = 'Subject-adapted';
         case 'fs_precomputed',  ref_matrix_type = 'Freesurfer (precomputed)';
         case 'fs_interpolated', ref_matrix_type = 'Freesurfer (interpolated)';
         case 'bst_headmodel',   ref_matrix_type = 'Brainstorm leadfield';
+        otherwise,              ref_matrix_type = 'Subject-adapted';
     end
-    parallel             = sProcess.options.parallel.Value;
-    visualize_artifacts  = sProcess.options.visualize_artifacts.Value;
-    if isfield(sProcess.options, 'save_artifacts') && isfield(sProcess.options.save_artifacts, 'Value')
-        save_artifacts = sProcess.options.save_artifacts.Value;
+    if isfield(sProcess.options, 'blending_method') && isfield(sProcess.options.blending_method, 'Value')
+        blending_method = sProcess.options.blending_method.Value;
     else
-        save_artifacts = 0;
+        blending_method = 'gromov-wasserstein';
+    end
+    if isfield(sProcess.options, 'subject_adapted_alpha') && isfield(sProcess.options.subject_adapted_alpha, 'Value')
+        subject_adapted_alpha = sProcess.options.subject_adapted_alpha.Value{1};
+    else
+        subject_adapted_alpha = 0.5;
+    end
+    if isfield(sProcess.options, 'num_comp_per_epoch') && isfield(sProcess.options.num_comp_per_epoch, 'Value')
+        num_comp_per_epoch = sProcess.options.num_comp_per_epoch.Value{1};
+    else
+        num_comp_per_epoch = 3;
+    end
+    if isfield(sProcess.options, 'run_bayesopt') && isfield(sProcess.options.run_bayesopt, 'Value')
+        run_bayesopt = sProcess.options.run_bayesopt.Value;
+    else
+        run_bayesopt = 1;
+    end
+    if isfield(sProcess.options, 'bayesopt_max_evals') && isfield(sProcess.options.bayesopt_max_evals, 'Value')
+        bayesopt_max_evals = sProcess.options.bayesopt_max_evals.Value{1};
+    else
+        bayesopt_max_evals = 20;
+    end
+    if isfield(sProcess.options, 'resampling') && isfield(sProcess.options.resampling, 'Value')
+        resampling = sProcess.options.resampling.Value;
+    else
+        resampling = 1;
+    end
+    parallel             = logical(sProcess.options.parallel.Value);
+    visualize_artifacts  = logical(sProcess.options.visualize_artifacts.Value);
+    if isfield(sProcess.options, 'save_artifacts') && isfield(sProcess.options.save_artifacts, 'Value')
+        save_artifacts = logical(sProcess.options.save_artifacts.Value);
+    else
+        save_artifacts = false;
     end
     if isfield(sProcess.options, 'reject_by_enova') && sProcess.options.reject_by_enova.Value
         enova_threshold = sProcess.options.enova_threshold.Value{1};
@@ -132,8 +194,18 @@ end
 
 %% ===== FORMAT COMMENT =====
 function Comment = FormatComment(sProcess) %#ok<DEFNU>
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold, enova_threshold_per_channel, ~] = GetOptions(sProcess);
-    Comment = ['GEDAI: ' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
+    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold, enova_threshold_per_channel, ~, run_bayesopt, bayesopt_max_evals, subject_adapted_alpha, blending_method, resampling, num_comp_per_epoch] = GetOptions(sProcess);
+    if run_bayesopt
+        Comment = ['GEDAI (BayesOpt): ' ref_matrix_type ', ' blending_method ', max=' num2str(bayesopt_max_evals)];
+        if resampling
+            Comment = [Comment, ', Resample=1'];
+        end
+    else
+        Comment = ['GEDAI: ' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
+        if strcmp(ref_matrix_type, 'Subject-adapted')
+            Comment = [Comment ', ' blending_method ' (alpha=' num2str(subject_adapted_alpha) ', comps=' num2str(num_comp_per_epoch) ')'];
+        end
+    end
     if ~isempty(enova_threshold)
         Comment = [Comment, ', ENOVA=' num2str(enova_threshold)];
     end
@@ -158,7 +230,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
     end
 
     % Get options
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts] = GetOptions(sProcess);
+    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts, run_bayesopt, bayesopt_max_evals, subject_adapted_alpha, blending_method, resampling, num_comp_per_epoch] = GetOptions(sProcess);
 
     % Iterate over inputs
     for iInput = 1:length(sInputs)
@@ -291,7 +363,9 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 sInputMAG.A = sInputFiltered.A(mag_idx_in_filtered, :);
                 EEG_MAG = brainstorm2eeglab(sInputMAG, ChannelMatMAG);
                 if length(sInputMAG.TimeVector) > 1, EEG_MAG.srate = 1 / mean(diff(sInputMAG.TimeVector)); end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                if strcmp(ref_matrix_type, 'Subject-adapted')
+                    ref_matrix_param_MAG = 'subject_adapted';
+                elseif strcmp(ref_matrix_type, 'Brainstorm leadfield')
                     Gain_MAG = Gain_avref(mag_idx_in_filtered, :);
                     ref_matrix_param_MAG = Gain_MAG * Gain_MAG';
                 elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
@@ -299,7 +373,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 else
                     ref_matrix_param_MAG = 'interpolated';
                 end
-                [EEGclean_MAG, EEGartifacts_MAG] = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
+                [EEGclean_MAG, EEGartifacts_MAG] = execute_gedai_engine(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type, run_bayesopt, bayesopt_max_evals, subject_adapted_alpha, blending_method, resampling, num_comp_per_epoch);
 
                 % --- GRAD ---
                 ChannelMatGRAD = ChannelMatFiltered;
@@ -308,7 +382,9 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 sInputGRAD.A = sInputFiltered.A(grad_idx_in_filtered, :);
                 EEG_GRAD = brainstorm2eeglab(sInputGRAD, ChannelMatGRAD);
                 if length(sInputGRAD.TimeVector) > 1, EEG_GRAD.srate = 1 / mean(diff(sInputGRAD.TimeVector)); end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                if strcmp(ref_matrix_type, 'Subject-adapted')
+                    ref_matrix_param_GRAD = 'subject_adapted';
+                elseif strcmp(ref_matrix_type, 'Brainstorm leadfield')
                     Gain_GRAD = Gain_avref(grad_idx_in_filtered, :);
                     ref_matrix_param_GRAD = Gain_GRAD * Gain_GRAD';
                 elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
@@ -316,7 +392,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 else
                     ref_matrix_param_GRAD = 'interpolated';
                 end
-                [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
+                [EEGclean_GRAD, EEGartifacts_GRAD] = execute_gedai_engine(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type, run_bayesopt, bayesopt_max_evals, subject_adapted_alpha, blending_method, resampling, num_comp_per_epoch);
 
                 target_length = size(sInputFiltered.A, 2);
                 mask_MAG = get_samples_to_keep_mask(EEGclean_MAG, target_length);
@@ -359,14 +435,16 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 if length(sInputFiltered.TimeVector) > 1
                     EEG.srate = 1 / mean(diff(sInputFiltered.TimeVector));
                 end
-                if strcmp(ref_matrix_type, 'Brainstorm leadfield')
+                if strcmp(ref_matrix_type, 'Subject-adapted')
+                    ref_matrix_param = 'subject_adapted';
+                elseif strcmp(ref_matrix_type, 'Brainstorm leadfield')
                     ref_matrix_param = Gain_avref * Gain_avref';
                 elseif strcmp(ref_matrix_type, 'Freesurfer (precomputed)')
                     ref_matrix_param = 'precomputed';
                 else
                     ref_matrix_param = 'interpolated';
                 end
-                [EEGclean, EEGartifacts] = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
+                [EEGclean, EEGartifacts] = execute_gedai_engine(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type, run_bayesopt, bayesopt_max_evals, subject_adapted_alpha, blending_method, resampling, num_comp_per_epoch);
             end
 
             % =========================================================
@@ -605,4 +683,40 @@ function OutputFile = SaveAndRegisterData(sInput, GedaiDataType, FileMatOut, Cha
         OutputFile = MatFileName;
     end
 end
+
+function [EEGclean, EEGartifacts] = execute_gedai_engine(EEG_in, artifact_thresh, epoch_cycles, lowcut, ref_param, use_parallel, vis, enova_ep, enova_ch, sig_type, is_bayesopt, max_evals, alpha_val, blend_meth, is_resampling, n_comps)
+    if nargin < 16 || isempty(n_comps), n_comps = 3; end
+    enova_ep_val = enova_ep;
+    if isempty(enova_ep_val), enova_ep_val = inf; end
+    enova_ch_val = enova_ch;
+    if isempty(enova_ch_val), enova_ch_val = inf; end
+
+    if is_bayesopt
+        switch artifact_thresh
+            case 'auto', default_d = 7;
+            case 'auto+', default_d = 8.5;
+            case 'auto-', default_d = 4;
+            otherwise
+                if isnumeric(artifact_thresh), default_d = artifact_thresh; else, default_d = 7; end
+        end
+
+        [EEGclean, EEGartifacts] = GEDAI_bayesopt(EEG_in, ...
+            'max_evals', max_evals, ...
+            'lowcut_frequency', lowcut, ...
+            'ref_matrix_type', ref_param, ...
+            'blending_method', blend_meth, ...
+            'signal_type', sig_type, ...
+            'parallel', use_parallel, ...
+            'visualize', vis, ...
+            'default_denoising', default_d, ...
+            'default_epoch_cycles', epoch_cycles, ...
+            'ENOVA_threshold_per_channel', enova_ch_val, ...
+            'ENOVA_threshold_per_epoch', enova_ep_val, ...
+            'resampling', logical(is_resampling));
+    else
+        gedai_opts = struct('subject_adapted_alpha', alpha_val, 'num_comp_per_epoch', n_comps, 'regularization_lambda', 0.05, 'blending_method', blend_meth, 'resample_columns', logical(is_resampling));
+        [EEGclean, EEGartifacts] = GEDAI(EEG_in, artifact_thresh, epoch_cycles, lowcut, ref_param, use_parallel, vis, enova_ep_val, enova_ch_val, sig_type, Inf, '', gedai_opts);
+    end
+end
+
 
