@@ -48,7 +48,7 @@
 %                                 (with dimensions channel x channel) via a matlab variable
 % 
 % 
-%   parallel                    - Boolean for using parallel ('multicore') processing 
+%   parallelize                    - Boolean for using parallel ('multicore') processing 
 % 
 %   visualize_artifacts         - Boolean for artifact visualization 
 %                                 using vis_artifacts function from the ASR toolbox
@@ -108,7 +108,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, signal_type, smoothing_window_seconds, varargin)
+function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band, ENOVA_per_channel]=GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallelize, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, signal_type, smoothing_window_seconds, varargin)
 
 if nargin < 2 || isempty(artifact_threshold_type)
     artifact_threshold_type = 'auto';
@@ -122,8 +122,8 @@ end
 if nargin < 5 || isempty(ref_matrix_type)
     ref_matrix_type = 'precomputed';
 end
-if nargin < 6 || isempty(parallel)
-    parallel = true;
+if nargin < 6 || isempty(parallelize)
+    parallelize = true;
 end
 if nargin < 7 || isempty(visualize_artifacts)
     visualize_artifacts = false;
@@ -246,7 +246,7 @@ if ENOVA_threshold_per_channel < inf
     
     % Run GEDAI with channel rejection disabled (inf) to identify bad channels
     % Also disable epoch rejection in pass 1 so channel variance isn't computed on incomplete data
-    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallel, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, struct('silent', true));
+    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, struct('silent', true));
     
     clear EEGclean_p1 EEGartifacts_p1; % Free memory
     
@@ -286,7 +286,7 @@ if ENOVA_threshold_per_channel < inf
         % --- PASS 2 ---
         disp([newline '--- PASS 2: Processing reduced data with global epoch thresholds ---']);
         [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = ...
-            GEDAI(EEG_reduced, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_reduced, parallel, false, ENOVA_threshold_per_epoch, inf, signal_type, smoothing_window_seconds, output_reference_channel, ENOVA_per_epoch_p1, ...
+            GEDAI(EEG_reduced, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_reduced, parallelize, false, ENOVA_threshold_per_epoch, inf, signal_type, smoothing_window_seconds, output_reference_channel, ENOVA_per_epoch_p1, ...
             struct('original_channel_threshold', original_channel_threshold, 'num_channels_rejected', length(channels_to_remove), 'total_original_channels', size(EEGin.data, 1)));
         
         % --- INTERPOLATION ---
@@ -406,10 +406,10 @@ if ENOVA_threshold_per_channel < inf
         end
         if isempty(output_reference_channel)
             com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallel, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds));
+                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds));
         else
             com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallel, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
         end
 
         % Optional output re-reference to a user-specified channel label
@@ -702,7 +702,7 @@ end
     broadband_artifact_threshold_type = artifact_threshold_type;
     broadband_minThreshold = -4;
     broadband_maxThreshold = 12;
-    [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallel, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
+    [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
 
@@ -822,27 +822,41 @@ band_min_thresholds = zeros(1, num_bands_to_process);
 band_min_thresholds(center_frequencies(1:num_bands_to_process) >= lowcut_frequency & center_frequencies(1:num_bands_to_process) <= 60) = -6;
 success_parallel = false;
 
-if parallel
+if parallelize
     try
         temp_sensai_scores = zeros(1, num_bands_to_process);
         temp_thresholds = zeros(1, num_bands_to_process);
         temp_thresholds_arrays = cell(1, num_bands_to_process);
         temp_enova_scores = zeros(1, num_bands_to_process);
         
+        % BROADCAST OPTIMIZATION: Wrap large / read-only variables as
+        % parallel.pool.Constant so they are shipped to workers ONCE
+        % instead of being re-serialized on every parfor iteration. This
+        % also avoids broadcasting the entire EEGavRef struct (whose .data
+        % field is large) when only .chanlocs is used inside the loop.
+        % Denoising output is byte-for-byte identical; only transfer
+        % overhead changes. (parallel.pool.Constant works on process and
+        % thread pools, and degrades gracefully with no pool.)
+        const_unfiltered = parallel.pool.Constant(unfiltered_data);
+        const_refCOV     = parallel.pool.Constant(refCOV);
+        const_chanlocs   = parallel.pool.Constant(EEGavRef.chanlocs);
+        const_epoch_sz   = parallel.pool.Constant(epoch_sizes_per_wavelet_band);
+        const_band_mins  = parallel.pool.Constant(band_min_thresholds);
+
         % MEMORY OPTIMIZED: Incremental band extraction in parallel
         parfor f = 1:num_bands_to_process
             % Extract single band on-the-fly (no full wpt_EEG storage)
-            wavelet_data_band = stateful_modwt_single_band(unfiltered_data, wavelet_type, actual_decomposition_level, f)';
+            wavelet_data_band = stateful_modwt_single_band(const_unfiltered.Value, wavelet_type, actual_decomposition_level, f)';
             
-            current_epoch_size = epoch_sizes_per_wavelet_band(f);
-            current_minThreshold = band_min_thresholds(f);
+            current_epoch_size = const_epoch_sz.Value(f);
+            current_minThreshold = const_band_mins.Value(f);
 
             try
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, const_refCOV.Value, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             catch ME
                  % If OOM or other memory error, try single precision
                  warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                 [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, const_refCOV.Value, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
             
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -863,9 +877,9 @@ if parallel
     end
 end
 
-if ~parallel || ~success_parallel
+if ~parallelize || ~success_parallel
     success_serial = false;
-    if parallel && ~success_parallel
+    if parallelize && ~success_parallel
          disp('Executing fallback: Double Precision Non-Parallel Processing...');
     end
     
@@ -1009,10 +1023,10 @@ if ~ischar(ref_matrix_type)
 end
 if isempty(output_reference_channel)
     com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallel, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds));
+        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds));
 else
     com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallel, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
 end
 
 if visualize_artifacts

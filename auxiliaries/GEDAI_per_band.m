@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallel, signal_type, minThreshold, maxThreshold, smoothing_window_seconds)
+function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallelize, signal_type, minThreshold, maxThreshold, smoothing_window_seconds)
 
 if isempty(eeg_data)
     error('Cannot process empty data');
@@ -167,7 +167,7 @@ if ~isinf(smoothing_window_seconds)
                 SIGNAL_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 NOISE_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 SENSAI_score_sweep = zeros(1, length(AutomaticThresholdSweep));
-                if parallel
+                if parallelize
                     parfor threshold_index=1:length(AutomaticThresholdSweep)
                         artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
                         [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score_sweep(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
@@ -578,7 +578,7 @@ else
                 SIGNAL_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 NOISE_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 SENSAI_score = zeros(1, length(AutomaticThresholdSweep));
-                if parallel
+                if parallelize
                     parfor threshold_index=1:length(AutomaticThresholdSweep)
                         artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
                         % Call SENSAI function
