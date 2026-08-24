@@ -1561,20 +1561,9 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                         disp([newline 'GEDAI Leadfield model: BEM Warped Surface source model'])
                     end
 
-                    %  Boundary Element Method (BEM) head model based on EEGLAB/Fieldtrip source model, see https://eeglab.org/tutorials/09_source/Model_Settings.html
-                    try
-                        template_locs = readlocs('standard_1005.elc');
-                        common_labels = intersect(lower({EEGin.chanlocs.labels}), lower({template_locs.labels}));
-                    catch
-                        common_labels = [];
-                    end
-
-                    if ~isempty(common_labels)
-                        [~, chanlocs_transform] = coregister(EEGin.chanlocs, 'standard_1005.elc','warp', 'auto', 'manual', 'off');
-                    else
-                        disp('Warning: no common channel labels found with standard_1005.elc. Warping bypassed; using default scaling/alignment instead.');
-                        [~, chanlocs_transform] = coregister(EEGin.chanlocs, 'standard_1005.elc', 'manual', 'off');
-                    end
+                    % Boundary Element Method (BEM) head model based on EEGLAB/Fieldtrip source model, see https://eeglab.org/tutorials/09_source/Model_Settings.html
+                    % Use rigid alignment (isotropic scaling) to preserve cap geometry and support custom channel names
+                    [~, chanlocs_transform] = coregister(EEGin.chanlocs, 'standard_1005.elc', 'manual', 'off');
                     EEGin = pop_dipfit_settings(EEGin, 'hdmfile','standard_vol.mat','mrifile','standard_mri.mat','chanfile','standard_1005.elc','coordformat','MNI','coord_transform',chanlocs_transform);
                     EEGin = pop_leadfield(EEGin, 'sourcemodel','head_modelColin27_5003_Standard-10-5-Cap339.mat','sourcemodel2mni',[0 -24 -45 0 0 -1.5708 1000 1000 1000] ,'downsample',1); % Surface Colin27
                     
