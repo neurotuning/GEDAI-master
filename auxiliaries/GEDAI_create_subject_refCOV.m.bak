@@ -162,29 +162,9 @@ if ~has_precomputed_A_clean
             pattern_power = sum(A_all.^2, 1);
             var_sensor = var_comp .* pattern_power; % Total scalp sensor variance explained
             
-            % Spectral Entropy of Component Time Series after temporal diff (selects highly rhythmic components)
-            S_all = V_all' * X_k;
-            if size(S_all, 2) > 2
-                S_diff = diff(S_all, 1, 2);
-                N_diff = size(S_diff, 2);
-                N_fft = 2^nextpow2(N_diff);
-                fft_vals = fft(S_diff - mean(S_diff, 2), N_fft, 2);
-                psd = abs(fft_vals(:, 1:floor(N_fft/2) + 1)).^2;
-                psd_sum = sum(psd, 2);
-                psd_sum(psd_sum < 1e-12) = 1;
-                P_norm = psd ./ psd_sum;
-                log_P = log2(P_norm + 1e-12);
-                spec_entropy = -sum(P_norm .* log_P, 2);
-                max_entropy = log2(size(P_norm, 2));
-                norm_spec_entropy = spec_entropy / max(1e-6, max_entropy);
-            else
-                norm_spec_entropy = ones(size(V_all, 2), 1);
-            end
-            
-            % Leadfield Power + Rhythmicity Ranking (Spectral Entropy in Denominator)
+            % Strategy 2: Leadfield Power Ranking (high EEG variance + high anatomical fidelity)
             eps_lambda = max(1e-6, 1e-3 * median(abs(lambdas)));
-            eps_entropy = 1e-3;
-            leadfield_power_score = var_sensor ./ ((abs(lambdas(:)') + eps_lambda) .* (norm_spec_entropy(:)' + eps_entropy));
+            leadfield_power_score = var_sensor ./ (abs(lambdas(:)') + eps_lambda);
             
             [~, sort_idx] = sort(leadfield_power_score, 'descend');
             selected_idx = sort_idx(1:min(num_comp_per_epoch, length(sort_idx)));
@@ -585,6 +565,5 @@ function D = cov2dist_gedai(C)
     D = sqrt(D_sq);
     D = D / max(D(:)); % Normalize for stable Sinkhorn scaling
 end
-
 
 
