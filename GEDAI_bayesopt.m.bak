@@ -357,7 +357,7 @@ fprintf('  Leadfield Model:       %s\n', opts.ref_matrix_type);
 fprintf('  Denoising Strength:    %.2f\n', d_opt);
 if is_subject_adapted
     fprintf('  Blending Method:       %s\n', opts.blending_method);
-    fprintf('  Subject-Adapted Alpha: %.4f (%.2f%% empirical, %.2f%% leadfield)\n', ...
+    fprintf('  Subject-Adapted Alpha: %.3f (%.1f%% empirical, %.1f%% leadfield)\n', ...
         a_opt, (1 - a_opt) * 100, a_opt * 100);
     fprintf('  Components per Epoch:  %d components\n', comp_opt);
     fprintf('  Regularization Lambda: 0.05 (5%% isotropic shrinkage)\n');
@@ -509,7 +509,7 @@ function update_realtime_figure(state)
             hb = bar(ax2, 1, bar_heights, 0.4, 'FaceColor', 'flat');
             hb.CData(1, :) = [0.22  0.45  0.75];   % Alpha (Blue)
             
-            lbl1 = sprintf('Alpha = %.4f\n(%.2f%% Emp, %.2f%% Lead)', a_val, (1 - a_val) * 100, a_val * 100);
+            lbl1 = sprintf('Alpha = %.3f\n(%.0f%% Emp, %.0f%% Lead)', a_val, (1 - a_val) * 100, a_val * 100);
             
             text(ax2, 1, bar_heights(1) + 0.05, lbl1, ...
                  'HorizontalAlignment', 'center', 'Color', [0.95 0.95 0.95], 'FontWeight', 'bold', 'FontSize', 10);
