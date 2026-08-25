@@ -181,26 +181,10 @@ if ~has_precomputed_A_clean
                 norm_spec_entropy = ones(size(V_all, 2), 1);
             end
             
-            % Multiplicative Non-Parametric Rank Aggregation in (0, 1]
-            N_cand = size(V_all, 2);
-            
-            % 1. Sensor Variance Rank (Higher variance is better -> Rank N = 1.0)
-            [~, idx_var] = sort(var_sensor, 'ascend');
-            r_var = zeros(1, N_cand);
-            r_var(idx_var) = (1:N_cand) / N_cand;
-            
-            % 2. Leadfield Eigenvalue Rank (Lower |lambda| is better -> Rank N = 1.0)
-            [~, idx_lambda] = sort(abs(lambdas(:)'), 'descend');
-            r_lambda = zeros(1, N_cand);
-            r_lambda(idx_lambda) = (1:N_cand) / N_cand;
-            
-            % 3. Spectral Entropy Rank (Lower entropy / higher rhythmicity is better -> Rank N = 1.0)
-            [~, idx_entropy] = sort(norm_spec_entropy(:)', 'descend');
-            r_entropy = zeros(1, N_cand);
-            r_entropy(idx_entropy) = (1:N_cand) / N_cand;
-            
-            % Combined Multiplicative Rank Score: requires strong performance across all 3 criteria
-            leadfield_power_score = r_var .* r_lambda .* r_entropy;
+            % Leadfield Power + Rhythmicity Ranking (Spectral Entropy in Denominator)
+            eps_lambda = max(1e-6, 1e-3 * median(abs(lambdas)));
+            eps_entropy = 1e-3;
+            leadfield_power_score = var_sensor ./ ((abs(lambdas(:)') + eps_lambda) .* (norm_spec_entropy(:)' + eps_entropy));
             
             [~, sort_idx] = sort(leadfield_power_score, 'descend');
             selected_idx = sort_idx(1:min(num_comp_per_epoch, length(sort_idx)));
@@ -601,7 +585,6 @@ function D = cov2dist_gedai(C)
     D = sqrt(D_sq);
     D = D / max(D(:)); % Normalize for stable Sinkhorn scaling
 end
-
 
 
 
