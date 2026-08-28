@@ -51,6 +51,11 @@ if nargin < 12 || isempty(smoothing_window_seconds)
     smoothing_window_seconds = Inf;
 end
 
+% Option: Trace-normalize dataCOV and refCOV before GEVD
+% Minimizes removal of high-amplitude brain components (e.g. alpha bursts, ERPs)
+% by evaluating component energy relative to epoch total power.
+trace_normalize_GEVD = true;
+
 %% Pad and Epoch Data
 pnts_original = size(eeg_data, 2); 
 epoch_samples = round(srate * epoch_size);
@@ -154,8 +159,7 @@ if ~isinf(smoothing_window_seconds)
         Evec_sub = zeros(N_EEG_electrodes, N_EEG_electrodes, w_len, 'like', eeg_data);
         Eval_sub = zeros(N_EEG_electrodes, N_EEG_electrodes, w_len, 'like', eeg_data);
         for i = 1:w_len
-            COV_sub(:,:,i) = (COV_sub(:,:,i) + COV_sub(:,:,i)') / 2;
-            [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(COV_sub(:,:,i), refCOV_reg, 'chol');
+            [Evec_sub(:,:,i), Eval_sub(:,:,i)] = compute_gevd_epoch(COV_sub(:,:,i), refCOV_reg, trace_normalize_GEVD);
         end
         
         switch optimization_type
@@ -245,8 +249,7 @@ if ~isinf(smoothing_window_seconds)
         Eval_chunk = zeros(N_EEG_electrodes, N_EEG_electrodes, c_len, 'like', eeg_data);
         for i = 1:c_len
             cov_epoch = cov(EEGdata_epoched_chunk(:,:,i)');
-            cov_epoch = (cov_epoch + cov_epoch') / 2;
-            [Evec_chunk(:,:,i), Eval_chunk(:,:,i)] = eig(cov_epoch, refCOV_reg, 'chol');
+            [Evec_chunk(:,:,i), Eval_chunk(:,:,i)] = compute_gevd_epoch(cov_epoch, refCOV_reg, trace_normalize_GEVD);
         end
         
         chunk_threshold = artifact_threshold_array(c_start:c_end);
@@ -372,8 +375,7 @@ if ~isinf(smoothing_window_seconds)
         Eval_chunk = zeros(N_EEG_electrodes, N_EEG_electrodes, c_len, 'like', eeg_data);
         for i = 1:c_len
             cov_epoch = cov(EEGdata_epoched_chunk(:,:,i)');
-            cov_epoch = (cov_epoch + cov_epoch') / 2;
-            [Evec_chunk(:,:,i), Eval_chunk(:,:,i)] = eig(cov_epoch, refCOV_reg, 'chol');
+            [Evec_chunk(:,:,i), Eval_chunk(:,:,i)] = compute_gevd_epoch(cov_epoch, refCOV_reg, trace_normalize_GEVD);
         end
         
         chunk_threshold = artifact_threshold_2(c_start:c_end);
@@ -458,13 +460,10 @@ else
     Evec_2 = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs-1, 'like', eeg_data);
     Eval_2 = zeros(N_EEG_electrodes, N_EEG_electrodes, N_epochs-1, 'like', eeg_data);
     for i=1:N_epochs-1
-        COV(:,:,i) = (COV(:,:,i) + COV(:,:,i)') / 2;
-        [Evec(:,:,i), Eval(:,:,i)] = eig(COV(:,:,i), refCOV_reg, 'chol');
-        COV_2(:,:,i) = (COV_2(:,:,i) + COV_2(:,:,i)') / 2;
-        [Evec_2(:,:,i), Eval_2(:,:,i)] = eig(COV_2(:,:,i), refCOV_reg, 'chol');
+        [Evec(:,:,i), Eval(:,:,i)] = compute_gevd_epoch(COV(:,:,i), refCOV_reg, trace_normalize_GEVD);
+        [Evec_2(:,:,i), Eval_2(:,:,i)] = compute_gevd_epoch(COV_2(:,:,i), refCOV_reg, trace_normalize_GEVD);
     end
-    COV(:,:,N_epochs) = (COV(:,:,N_epochs) + COV(:,:,N_epochs)') / 2;
-    [Evec(:,:,N_epochs), Eval(:,:,N_epochs)] = eig(COV(:,:,N_epochs), refCOV_reg, 'chol');
+    [Evec(:,:,N_epochs), Eval(:,:,N_epochs)] = compute_gevd_epoch(COV(:,:,N_epochs), refCOV_reg, trace_normalize_GEVD);
     
     
     %% Determine Artifact Threshold and Clean EEG
@@ -745,4 +744,18 @@ target_chunk_bytes = 256 * 1024 * 1024;
 memory_limited_chunk_size = max(1, floor(target_chunk_bytes / max(estimated_scalars_per_epoch * bytes_per_scalar, 1)));
 
 chunk_size = max(1, min(time_limited_chunk_size, memory_limited_chunk_size));
+end
+
+function [Evec, Eval] = compute_gevd_epoch(COV_epoch, refCOV_reg, trace_normalize_GEVD)
+    COV_epoch = (COV_epoch + COV_epoch') / 2;
+    if nargin >= 3 && trace_normalize_GEVD
+        tr_C = trace(COV_epoch);
+        tr_R = trace(refCOV_reg);
+        if tr_C > 0 && tr_R > 0
+            [Evec, Eval] = eig(COV_epoch / tr_C, refCOV_reg / tr_R, 'chol');
+            Evec = Evec / sqrt(tr_R);
+            return;
+        end
+    end
+    [Evec, Eval] = eig(COV_epoch, refCOV_reg, 'chol');
 end

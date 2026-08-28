@@ -18,7 +18,7 @@ if nargin < 6 || isempty(signal_type)
     signal_type = 'eeg';
 end
 if nargin < 7 || isempty(SSI_top_PCs)
-    if strcmpi(signal_type, 'meg') || size(ref_cov, 1) <= 100
+    if strcmpi(signal_type, 'meg')
         SSI_top_PCs = 4; 
     else
         SSI_top_PCs = 3; 
