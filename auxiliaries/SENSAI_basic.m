@@ -81,14 +81,19 @@ for epoch = 1:num_epochs
     % SSI = product of cosine similarities (= 1 when perfectly aligned)
     SIGNAL_subspace_similarity_distribution(epoch) = prod(cos_theta_sig);
 
-    % NOISE SUBSPACE (Energy-Fraction Rank): top eigenvectors of noise covariance
+    % NOISE SUBSPACE
     cov_noise = cov(noise_EEG_epoched(:,:,epoch)');
     cov_noise = (cov_noise + cov_noise') / 2;
     [Vnoise, Dnoise] = eig(cov_noise);
     [~, idxNoise] = sort(diag(Dnoise), 'descend');
     basis_noise = Vnoise(:, idxNoise(1:SSI_top_PCs));
-    s_noise = svd(basis_noise' * basis_ref);
-    NOISE_subspace_similarity_distribution(epoch) = sum(s_noise.^6);
+    if strcmpi(signal_type, 'meg')
+        s_noise = svd(basis_noise' * basis_ref);
+        NOISE_subspace_similarity_distribution(epoch) = sum(s_noise.^6);
+    else
+        cos_theta_noise = subspace_angles(basis_noise, basis_ref);
+        NOISE_subspace_similarity_distribution(epoch) = prod(cos_theta_noise);
+    end
 
     % Explained Noise Variance (ENOVA)
     original_epoch = signal_EEG_epoched(:,:,epoch) + noise_EEG_epoched(:,:,epoch);

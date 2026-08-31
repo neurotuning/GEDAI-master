@@ -332,16 +332,51 @@ if ~isinf(smoothing_window_seconds)
                 SIGNAL_subspace_dist(global_epo_idx) = abs(det(evecs_signal' * Template_guess));
             end
             
-            % --- NOISE SUBSPACE (Energy-Fraction Rank) ---
-            if num_bad > 0
-                Evec_bad = Evec_chunk(:, bad_indices, i);
-                P_bad = refCOV_reg * Evec_bad;
-                [Q_bad, ~] = qr(P_bad, 0);
-                s = svd(Q_bad' * Template_guess);
-                NOISE_subspace_dist(global_epo_idx) = sum(s.^6);
+            % --- NOISE SUBSPACE ---
+            if strcmpi(signal_type, 'meg')
+                % Energy-Fraction Rank (Optimal for MEG)
+                if num_bad > 0
+                    Evec_bad = Evec_chunk(:, bad_indices, i);
+                    P_bad = refCOV_reg * Evec_bad;
+                    [Q_bad, ~] = qr(P_bad, 0);
+                    s = svd(Q_bad' * Template_guess);
+                    NOISE_subspace_dist(global_epo_idx) = sum(s.^6);
+                else
+                    NOISE_subspace_dist(global_epo_idx) = 0;
+                end
             else
-                % No bad components — zero noise penalty
-                NOISE_subspace_dist(global_epo_idx) = 0;
+                % Subspace Volume Determinant (Optimal for EEG)
+                if num_bad >= M_proj
+                    % Fast associative path
+                    Evec_bad = Evec_chunk(:, bad_indices, i);
+                    d_bad = current_evals(bad_indices);
+                    Y1_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_proj)));
+                    [Q1_noise, ~] = qr(Y1_noise, 0);
+                    T_noise = refCOV_reg * Q1_noise;
+                    Y2_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_noise)));
+                    [evecs_noise, ~] = qr(Y2_noise, 0);
+                    NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                elseif num_bad > 0
+                    % Fallback for rank-deficient noise
+                    Evec_bad = Evec_chunk(:, bad_indices, i);
+                    d_bad = current_evals(bad_indices);
+                    V_bad_rows = Evec_bad' * refCOV_reg;
+                    cov_noise = V_bad_rows' * (V_bad_rows .* d_bad);
+                    cov_noise = (cov_noise + cov_noise') / 2;
+                    
+                    if max(abs(cov_noise(:))) < tol_val
+                        Y1_noise = eye(N_EEG_electrodes, M_proj);
+                    else
+                        Y1_noise = cov_noise * Template_guess;
+                    end
+                    [Q1_noise, ~] = qr(Y1_noise, 0);
+                    Y2_noise = cov_noise * Q1_noise;
+                    [evecs_noise, ~] = qr(Y2_noise, 0);
+                    NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                else
+                    evecs_noise = eye(N_EEG_electrodes, M_proj);
+                    NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                end
             end
         end
         
