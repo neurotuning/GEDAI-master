@@ -17,6 +17,7 @@ end
 
 sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov,signal_type, SSI_top_PCs);
 [optimalThreshold, negMaxSENSAIScore] = local_fminbnd(sensaifunc, minThreshold, maxThreshold, 1e-2);
+maxSENSAIScore = -negMaxSENSAIScore;
 
 % % 1. Define the optimization variable (the threshold)
 % vars = optimizableVariable('threshold', [minThreshold, maxThreshold]);

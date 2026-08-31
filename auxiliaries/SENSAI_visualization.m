@@ -18,11 +18,7 @@ if nargin < 6 || isempty(signal_type)
     signal_type = 'eeg';
 end
 if nargin < 7 || isempty(SSI_top_PCs)
-    if strcmpi(signal_type, 'meg') || size(ref_cov, 1) <= 100
-        SSI_top_PCs = 4; 
-    else
-        SSI_top_PCs = 3; 
-    end
+    SSI_top_PCs = 3; 
 end
 
 %% ── 1. Epoch Data & Extract Covariances ─────────────────────────────────

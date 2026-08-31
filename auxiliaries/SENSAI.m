@@ -111,38 +111,20 @@ for epoch = 1:num_epochs
         SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
     end
 
-    % --- NOISE SUBSPACE ---
-    if num_bad >= M
-        % Fast associative path
+    % --- NOISE SUBSPACE (Energy-Fraction Rank) ---
+    % Uses sum(svd(Q_bad' * Template).^6) instead of det() to prevent
+    % overfiltering of brain-aligned components. The power p=6 sharply
+    % penalises removal of leadfield-aligned eigenvectors while permitting
+    % removal of low-alignment artifacts.
+    if num_bad > 0
         Evec_bad = Evec(:, bad_indices, epoch);
-        d_bad = current_evals(bad_indices);
-        Y1_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T)));
-        [Q1_noise, ~] = qr(Y1_noise, 0);
-        T_noise = refCOV_reg * Q1_noise;
-        Y2_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_noise)));
-        [evecs_noise, ~] = qr(Y2_noise, 0);
-        NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
-    elseif num_bad > 0
-        % Fallback for rank-deficient noise
-        Evec_bad = Evec(:, bad_indices, epoch);
-        d_bad = current_evals(bad_indices);
-        V_bad_rows = Evec_bad' * refCOV_reg;
-        cov_noise = V_bad_rows' * (V_bad_rows .* d_bad);
-        cov_noise = (cov_noise + cov_noise') / 2;
-        
-        if max(abs(cov_noise(:))) < tol
-            Y1_noise = eye(num_chans, M);
-        else
-            Y1_noise = cov_noise * Template_guess;
-        end
-        [Q1_noise, ~] = qr(Y1_noise, 0);
-        Y2_noise = cov_noise * Q1_noise;
-        [evecs_noise, ~] = qr(Y2_noise, 0);
-        NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
+        P_bad = refCOV_reg * Evec_bad;
+        [Q_bad, ~] = qr(P_bad, 0);
+        s = svd(Q_bad' * Template_guess);
+        NOISE_subspace_similarity_distribution(epoch) = sum(s.^6);
     else
-        % No bad components
-        evecs_noise = eye(num_chans, M);
-        NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
+        % No bad components — zero noise penalty
+        NOISE_subspace_similarity_distribution(epoch) = 0;
     end
 end
 

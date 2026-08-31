@@ -174,7 +174,15 @@ if ~isempty(varargin)
 end
 
 if nargin < 10 || isempty(signal_type)
+    % Auto-detect signal_type from channel types if available
     signal_type = 'eeg';
+    if isfield(EEGin, 'chanlocs') && ~isempty(EEGin.chanlocs) && isfield(EEGin.chanlocs, 'type')
+        types_cell = {EEGin.chanlocs.type};
+        valid_types = types_cell(~cellfun(@isempty, types_cell));
+        if any(contains(lower(valid_types), 'meg'))
+            signal_type = 'meg';
+        end
+    end
 end
 
 if strcmp(signal_type, 'eeg')
@@ -452,7 +460,7 @@ if ENOVA_threshold_per_channel < inf
             refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference);
             
             if ~isempty(refCOV_full)
-                if strcmpi(signal_type, 'meg'), vis_pcs = 4; else, vis_pcs = 3; end
+                vis_pcs = 3;
                 sensai_epoch_size = 1;
                 visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
                 EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
@@ -701,7 +709,11 @@ end
     broadband_optimization_type = 'parabolic';
     broadband_artifact_threshold_type = artifact_threshold_type;
     broadband_minThreshold = -4;
-    broadband_maxThreshold = 12;
+    if strcmpi(signal_type, 'meg')
+        broadband_maxThreshold = 8;
+    else
+        broadband_maxThreshold = 12;
+    end
     [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
@@ -1221,6 +1233,8 @@ if ~silent_mode
 
     disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
     disp(['Mean ENOVA: ' num2str(round(mean_ENOVA*100, 2, 'significant')) ' %']);
+    
+    % Display SENSAI PC Subspace Variance Explained
     if ENOVA_threshold_per_epoch < inf
         disp(['Bad epochs rejected: ' num2str(round(percentage_rejected,1)) ' % (' num2str(num_rejected) ' out of ' num2str(original_total_epochs) ' epochs)']);
     else
@@ -1316,9 +1330,7 @@ end
     % --- Manifold Classification (Broadband) BEFORE & AFTER Cleaning ---
     % Uses 50% overlapping 1-second epochs for denser coverage in the scatter plot
     if visualize_artifacts && ~isempty(refCOV)
-        % Ensure visualization uses the same PC count as the SENSAI scoring logic
-        if strcmpi(signal_type, 'meg'), vis_pcs = 4; else, vis_pcs = 3; end
-        
+        vis_pcs = 3;
         visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
         
         % Store metrics in EEG.etc.GEDAI
@@ -1463,10 +1475,11 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
         internal_reference = 'AvgRef';
     end
     G_full = [];
-    if ~ischar(ref_matrix_type)
+    if isnumeric(ref_matrix_type)
         refCOV = ref_matrix_type; % Use custom covariance matrix
         disp([newline 'Using custom covariance matrix']);
     else
+        ref_matrix_type = char(ref_matrix_type);
         switch ref_matrix_type
             case 'precomputed'
                 if strcmp(internal_reference, 'REST')

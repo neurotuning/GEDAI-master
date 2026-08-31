@@ -114,20 +114,34 @@ if ~isinf(smoothing_window_seconds)
     
     % Pre-calculate RefCOV eigenvectors for SENSAI
     if strcmpi(signal_type, 'eeg')
-        refCOV_top_PCs = min(3, N_EEG_electrodes);
-        SSI_top_PCs = refCOV_top_PCs;
+        SSI_top_PCs = min(3, N_EEG_electrodes);
     elseif strcmpi(signal_type, 'meg')
-        all_evals_refCOV = eig(refCOV_reg);
-        all_evals_refCOV = sort(all_evals_refCOV, 'descend');
-        cumvar_refCOV = cumsum(all_evals_refCOV) / sum(all_evals_refCOV);
-        refCOV_top_PCs = find(cumvar_refCOV >= 0.85, 1, 'first');
-        refCOV_top_PCs = max(1, min(refCOV_top_PCs, N_EEG_electrodes - 1));
-        SSI_top_PCs = min(4, refCOV_top_PCs);
+        % Option 12: Adaptive GEVD Artifact Spectrum Pre-Scan
+        % Senses whether artifact is focal rank-1/2 (k = 2) or multi-dipole/complex (k = 3)
+        cov_data_prescan = cov(double(eeg_data)');
+        cov_data_prescan = (cov_data_prescan + cov_data_prescan') / 2;
+        [~, D_gevd_prescan] = eig(cov_data_prescan, refCOV_reg);
+        evals_prescan = sort(diag(D_gevd_prescan), 'descend');
+        
+        med_val_prescan = median(evals_prescan);
+        if med_val_prescan > 0
+            norm_evals = evals_prescan / med_val_prescan;
+        else
+            norm_evals = evals_prescan;
+        end
+        
+        % Check if component 3 has elevated power above baseline noise floor,
+        % or if components 1 & 2 indicate broad multi-dipole distribution
+        if norm_evals(3) > 200 || (norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000)
+            SSI_top_PCs = min(3, N_EEG_electrodes);
+        else
+            SSI_top_PCs = min(2, N_EEG_electrodes);
+        end
     end
     
     [Vs, Ds] = eig(refCOV_reg);
     [~, sidxS_Template_cov] = sort(diag(Ds), 'descend');
-    evecs_Template_cov = Vs(:, sidxS_Template_cov(1:refCOV_top_PCs));
+    evecs_Template_cov = Vs(:, sidxS_Template_cov(1:SSI_top_PCs));
     
     % Loop over local windows to optimize threshold curves
     for w = 1:num_windows
@@ -318,37 +332,16 @@ if ~isinf(smoothing_window_seconds)
                 SIGNAL_subspace_dist(global_epo_idx) = abs(det(evecs_signal' * Template_guess));
             end
             
-            % --- NOISE SUBSPACE ---
-            if num_bad >= M_proj
-                % Fast associative path
+            % --- NOISE SUBSPACE (Energy-Fraction Rank) ---
+            if num_bad > 0
                 Evec_bad = Evec_chunk(:, bad_indices, i);
-                d_bad = current_evals(bad_indices);
-                Y1_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_proj)));
-                [Q1_noise, ~] = qr(Y1_noise, 0);
-                T_noise = refCOV_reg * Q1_noise;
-                Y2_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_noise)));
-                [evecs_noise, ~] = qr(Y2_noise, 0);
-                NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
-            elseif num_bad > 0
-                % Fallback for rank-deficient noise
-                Evec_bad = Evec_chunk(:, bad_indices, i);
-                d_bad = current_evals(bad_indices);
-                V_bad_rows = Evec_bad' * refCOV_reg;
-                cov_noise = V_bad_rows' * (V_bad_rows .* d_bad);
-                cov_noise = (cov_noise + cov_noise') / 2;
-                
-                if max(abs(cov_noise(:))) < tol_val
-                    Y1_noise = eye(N_EEG_electrodes, M_proj);
-                else
-                    Y1_noise = cov_noise * Template_guess;
-                end
-                [Q1_noise, ~] = qr(Y1_noise, 0);
-                Y2_noise = cov_noise * Q1_noise;
-                [evecs_noise, ~] = qr(Y2_noise, 0);
-                NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                P_bad = refCOV_reg * Evec_bad;
+                [Q_bad, ~] = qr(P_bad, 0);
+                s = svd(Q_bad' * Template_guess);
+                NOISE_subspace_dist(global_epo_idx) = sum(s.^6);
             else
-                evecs_noise = eye(N_EEG_electrodes, M_proj);
-                NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                % No bad components — zero noise penalty
+                NOISE_subspace_dist(global_epo_idx) = 0;
             end
         end
         
@@ -494,38 +487,36 @@ else
     
     
     if strcmpi(signal_type, 'eeg')
-         refCOV_top_PCs = min(3, N_EEG_electrodes);
-         SSI_top_PCs = refCOV_top_PCs;
-    
-        % disp(['EEG  refCOV PCs: ' num2str(refCOV_top_PCs)]);
-        % disp(['EEG  SSI PCs: ' num2str(SSI_top_PCs) newline]);
+         SSI_top_PCs = min(3, N_EEG_electrodes);
     
     elseif strcmpi(signal_type, 'meg')
-    
-            % Adaptive: minimum PCs explaining >= 70% of refCOV variance
-            % Use refCOV_reg (regularized, always well-conditioned)
-            all_evals_refCOV = eig(refCOV_reg);
-            all_evals_refCOV = sort(all_evals_refCOV, 'descend');
-            cumvar_refCOV = cumsum(all_evals_refCOV) / sum(all_evals_refCOV);
-            refCOV_top_PCs = find(cumvar_refCOV >= 0.85, 1, 'first');
-            refCOV_top_PCs = max(1, min(refCOV_top_PCs, N_EEG_electrodes - 1));
-            % fprintf('MEG  RefCOV PCs: %d (%.0f%% var)\n', refCOV_top_PCs, 100 * cumvar_refCOV(refCOV_top_PCs));
-    
-        % Top PCs for SSI (separate from refCOV top PCs)
-            SSI_top_PCs = min(4, refCOV_top_PCs);
-        % disp(['MEG  SSI PCs: ' num2str(SSI_top_PCs) newline]);
+        % Option 12: Adaptive GEVD Artifact Spectrum Pre-Scan
+        % Senses whether artifact is focal rank-1/2 (k = 2) or multi-dipole/complex (k = 3)
+        cov_data_prescan = cov(double(eeg_data)');
+        cov_data_prescan = (cov_data_prescan + cov_data_prescan') / 2;
+        [~, D_gevd_prescan] = eig(cov_data_prescan, refCOV_reg);
+        evals_prescan = sort(diag(D_gevd_prescan), 'descend');
+        
+        med_val_prescan = median(evals_prescan);
+        if med_val_prescan > 0
+            norm_evals = evals_prescan / med_val_prescan;
+        else
+            norm_evals = evals_prescan;
+        end
+        
+        % Check if component 3 has elevated power above baseline noise floor,
+        % or if components 1 & 2 indicate broad multi-dipole distribution
+        if norm_evals(3) > 200 || (norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000)
+            SSI_top_PCs = min(3, N_EEG_electrodes);
+        else
+            SSI_top_PCs = min(2, N_EEG_electrodes);
+        end
     end
     
-    if refCOV_top_PCs < SSI_top_PCs
-        warning('GEDAI:LowRefCOVPCs', 'refCOV variance appears to be concentrated in too few principal components. Verify that leadfield matrix is well constructed.');
-    end
-    
-    
-    % Apply refCOV_top_PCs
-        % Use exact eig decomposition and sort to ensure stability and reproducibility
-        [Vs, Ds] = eig(refCOV_reg);
-        [~, sidxS_Template_cov] = sort(diag(Ds), 'descend');
-        evecs_Template_cov = Vs(:, sidxS_Template_cov(1:refCOV_top_PCs));
+    % Apply SSI_top_PCs
+    [Vs, Ds] = eig(refCOV_reg);
+    [~, sidxS_Template_cov] = sort(diag(Ds), 'descend');
+    evecs_Template_cov = Vs(:, sidxS_Template_cov(1:SSI_top_PCs));
     
     
     % --- Optimization Method Switch (Sliding Window) ---
