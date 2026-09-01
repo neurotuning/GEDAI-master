@@ -26,16 +26,14 @@ refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
 num_chans = size(refCOV, 1);
 epoch_samples = round(srate * epoch_size);
 
-% Determine the number of top PCs to use based on signal type
 if strcmpi(signal_type, 'meg')
     SSI_top_PCs = 4;
 else
     SSI_top_PCs = 3;
 end
-
-% Compute the reference subspace from the top SSI_top_PCs eigenvectors of refCOV
 [Vref, Dref] = eig(refCOV_reg);
 [~, idxRef] = sort(diag(Dref), 'descend');
+SSI_top_PCs = min(SSI_top_PCs, size(Vref, 2));
 basis_ref = Vref(:, idxRef(1:SSI_top_PCs));
 
 % --- FIX START: Truncate data to contain a whole number of epochs ---
