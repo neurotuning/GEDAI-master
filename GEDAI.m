@@ -305,57 +305,9 @@ if ENOVA_threshold_per_channel < inf
         if ~isfield(EEGclean, 'icawinv'), EEGclean.icawinv = []; end
         if ~isfield(EEGclean, 'icaact'), EEGclean.icaact = []; end
         
-        % Ensure polar coordinates exist in chanlocs for eeg_interp compatibility
-        if ~isfield(EEGclean.chanlocs, 'theta') || any(cellfun('isempty', {EEGclean.chanlocs.theta}))
-            try
-                EEGclean.chanlocs = convertlocs(EEGclean.chanlocs, 'cart2all');
-                EEGin.chanlocs = convertlocs(EEGin.chanlocs, 'cart2all');
-            catch
-                % Manual fallback if convertlocs is unavailable
-                for idx = 1:length(EEGclean.chanlocs)
-                    if ~isfield(EEGclean.chanlocs(idx), 'theta') || isempty(EEGclean.chanlocs(idx).theta)
-                        x = EEGclean.chanlocs(idx).X; y = EEGclean.chanlocs(idx).Y; z = EEGclean.chanlocs(idx).Z;
-                        if ~isnan(x) && ~isnan(y) && ~isnan(z)
-                            r = sqrt(x^2 + y^2 + z^2);
-                            if r > 0
-                                EEGclean.chanlocs(idx).theta = -atan2d(x, y);
-                                EEGclean.chanlocs(idx).radius = sqrt(x^2 + y^2) / r * 0.5;
-                            else
-                                EEGclean.chanlocs(idx).theta = 0;
-                                EEGclean.chanlocs(idx).radius = 0;
-                            end
-                        else
-                            EEGclean.chanlocs(idx).theta = 0;
-                            EEGclean.chanlocs(idx).radius = 0;
-                        end
-                    end
-                    if ~isfield(EEGclean.chanlocs(idx), 'sph_theta'),   EEGclean.chanlocs(idx).sph_theta = []; end
-                    if ~isfield(EEGclean.chanlocs(idx), 'sph_phi'),     EEGclean.chanlocs(idx).sph_phi = []; end
-                    if ~isfield(EEGclean.chanlocs(idx), 'sph_radius'),  EEGclean.chanlocs(idx).sph_radius = []; end
-                end
-                for idx = 1:length(EEGin.chanlocs)
-                    if ~isfield(EEGin.chanlocs(idx), 'theta') || isempty(EEGin.chanlocs(idx).theta)
-                        x = EEGin.chanlocs(idx).X; y = EEGin.chanlocs(idx).Y; z = EEGin.chanlocs(idx).Z;
-                        if ~isnan(x) && ~isnan(y) && ~isnan(z)
-                            r = sqrt(x^2 + y^2 + z^2);
-                            if r > 0
-                                EEGin.chanlocs(idx).theta = -atan2d(x, y);
-                                EEGin.chanlocs(idx).radius = sqrt(x^2 + y^2) / r * 0.5;
-                            else
-                                EEGin.chanlocs(idx).theta = 0;
-                                EEGin.chanlocs(idx).radius = 0;
-                            end
-                        else
-                            EEGin.chanlocs(idx).theta = 0;
-                            EEGin.chanlocs(idx).radius = 0;
-                        end
-                    end
-                    if ~isfield(EEGin.chanlocs(idx), 'sph_theta'),   EEGin.chanlocs(idx).sph_theta = []; end
-                    if ~isfield(EEGin.chanlocs(idx), 'sph_phi'),     EEGin.chanlocs(idx).sph_phi = []; end
-                    if ~isfield(EEGin.chanlocs(idx), 'sph_radius'),  EEGin.chanlocs(idx).sph_radius = []; end
-                end
-            end
-        end
+        % Ensure full valid coordinates exist in chanlocs for eeg_interp compatibility
+        EEGclean.chanlocs = sanitize_and_fill_chanlocs(EEGclean.chanlocs);
+        EEGin.chanlocs    = sanitize_and_fill_chanlocs(EEGin.chanlocs);
         EEGclean = eeg_interp_GEDAI(EEGclean, EEGin.chanlocs, 'spherical');
         
         % Reconstruct true EEGartifacts to perfectly preserve the fundamental invariant: original = clean + artifacts
@@ -414,10 +366,10 @@ if ENOVA_threshold_per_channel < inf
         end
         if isempty(output_reference_channel)
             com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds));
+                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
         else
             com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
         end
 
         % Optional output re-reference to a user-specified channel label
@@ -467,15 +419,15 @@ if ENOVA_threshold_per_channel < inf
             end
 
             EEGclean_for_vis = EEGclean;
-            EEGin_for_vis = EEGin;
+            EEGorig_for_vis  = EEGavRef_for_vis;
             if ~isempty(output_reference_channel)
                 EEGclean_for_vis = GEDAI_apply_output_reference(EEGclean_for_vis, output_reference_channel);
-                EEGin_for_vis = GEDAI_apply_output_reference(EEGin_for_vis, output_reference_channel);
+                EEGorig_for_vis  = GEDAI_apply_output_reference(EEGorig_for_vis, output_reference_channel);
             end
             if isfield(EEGclean.etc, 'GEDAI') && isfield(EEGclean.etc.GEDAI, 'samples_to_keep')
                 EEGclean_for_vis.etc.clean_sample_mask = EEGclean.etc.GEDAI.samples_to_keep;
             end
-            vis_artifacts(EEGclean_for_vis, EEGin_for_vis, 'ScaleBy', 'noscale', 'YScaling', 3*mad(EEGin_for_vis.data(:)));
+            vis_artifacts(EEGclean_for_vis, EEGorig_for_vis, 'ScaleBy', 'noscale', 'YScaling', 5*mad(EEGclean_for_vis.data(:)));
             
             % Plot sliding thresholds if applicable
             if smoothing_window_seconds ~= Inf && isfield(EEGclean.etc.GEDAI, 'artifact_threshold_array_per_band')
@@ -1035,10 +987,10 @@ if ~ischar(ref_matrix_type)
 end
 if isempty(output_reference_channel)
     com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds));
+        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
 else
     com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(ENOVA_threshold_per_channel), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
 end
 
 if visualize_artifacts
@@ -1057,7 +1009,7 @@ if visualize_artifacts
         EEGclean_for_vis.data = EEGclean_for_vis.data(:, clean_sample_mask);
         EEGclean_for_vis.pnts = size(EEGclean_for_vis.data, 2);
     end
-    vis_artifacts(EEGclean_for_vis, EEGavRef_for_vis, 'ScaleBy', 'noscale', 'YScaling', 3*mad(EEGavRef_for_vis.data(:)));
+    vis_artifacts(EEGclean_for_vis, EEGavRef_for_vis, 'ScaleBy', 'noscale', 'YScaling', 5*mad(EEGclean_for_vis.data(:)));
 end
 
 if ~isempty(regions)
@@ -1601,4 +1553,90 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
     % Ensure refCOV is real and perfectly symmetric to prevent eig/eigs errors
     refCOV = real(refCOV);
     refCOV = (refCOV + refCOV') / 2;
+end
+
+function chanlocs = sanitize_and_fill_chanlocs(chanlocs)
+    if isempty(chanlocs)
+        return;
+    end
+    
+    leadfield_electrodes = [];
+    try
+        p_aux = fileparts(which('GEDAI'));
+        L_path = fullfile(p_aux, 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat');
+        if exist(L_path, 'file')
+            L_data = load(L_path, 'leadfield4GEDAI');
+            if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
+                leadfield_electrodes = L_data.leadfield4GEDAI.electrodes;
+            end
+        end
+    catch
+        % ignore if leadfield file cannot be loaded
+    end
+
+    for idx = 1:length(chanlocs)
+        has_xyz = isfield(chanlocs(idx), 'X') && ~isempty(chanlocs(idx).X) && ...
+                  isnumeric(chanlocs(idx).X) && isscalar(chanlocs(idx).X) && ~isnan(chanlocs(idx).X) && ...
+                  isfield(chanlocs(idx), 'Y') && ~isempty(chanlocs(idx).Y) && ...
+                  isnumeric(chanlocs(idx).Y) && isscalar(chanlocs(idx).Y) && ~isnan(chanlocs(idx).Y) && ...
+                  isfield(chanlocs(idx), 'Z') && ~isempty(chanlocs(idx).Z) && ...
+                  isnumeric(chanlocs(idx).Z) && isscalar(chanlocs(idx).Z) && ~isnan(chanlocs(idx).Z);
+              
+        has_polar = isfield(chanlocs(idx), 'theta') && ~isempty(chanlocs(idx).theta) && ...
+                    isnumeric(chanlocs(idx).theta) && isscalar(chanlocs(idx).theta) && ~isnan(chanlocs(idx).theta) && ...
+                    isfield(chanlocs(idx), 'radius') && ~isempty(chanlocs(idx).radius) && ...
+                    isnumeric(chanlocs(idx).radius) && isscalar(chanlocs(idx).radius) && ~isnan(chanlocs(idx).radius);
+
+        if ~has_xyz && ~has_polar && ~isempty(leadfield_electrodes) && isfield(chanlocs(idx), 'labels') && ~isempty(chanlocs(idx).labels)
+            temp_names = {leadfield_electrodes.Name};
+            match_idx = find(strcmpi(strtrim(chanlocs(idx).labels), temp_names), 1);
+            if ~isempty(match_idx) && ~isempty(leadfield_electrodes(match_idx).Loc)
+                loc_3d = leadfield_electrodes(match_idx).Loc;
+                chanlocs(idx).X = loc_3d(1);
+                chanlocs(idx).Y = loc_3d(2);
+                chanlocs(idx).Z = loc_3d(3);
+                has_xyz = true;
+            end
+        end
+
+        if has_xyz
+            x = chanlocs(idx).X; y = chanlocs(idx).Y; z = chanlocs(idx).Z;
+            r_3d = sqrt(x^2 + y^2 + z^2);
+            r_xy = sqrt(x^2 + y^2);
+            if r_3d > 0
+                chanlocs(idx).theta = -atan2d(x, y);
+                chanlocs(idx).radius = (r_xy / r_3d) * 0.5;
+                chanlocs(idx).sph_theta = atan2d(y, x);
+                chanlocs(idx).sph_phi = asind(min(max(z / r_3d, -1), 1));
+                chanlocs(idx).sph_radius = r_3d;
+            else
+                chanlocs(idx).theta = 0;
+                chanlocs(idx).radius = 0;
+                chanlocs(idx).sph_theta = 0;
+                chanlocs(idx).sph_phi = 90;
+                chanlocs(idx).sph_radius = 1;
+            end
+        elseif has_polar
+            th_deg = chanlocs(idx).theta;
+            rad_val = chanlocs(idx).radius;
+            angle_rad = th_deg * pi / 180;
+            r_norm = min(max(rad_val / 0.5, 0), 1);
+            phi = (1 - r_norm) * (pi / 2);
+            chanlocs(idx).X = 85 * cos(phi) * sin(-angle_rad);
+            chanlocs(idx).Y = 85 * cos(phi) * cos(angle_rad);
+            chanlocs(idx).Z = 85 * sin(phi);
+            chanlocs(idx).sph_theta = atan2d(chanlocs(idx).Y, chanlocs(idx).X);
+            chanlocs(idx).sph_phi = asind(min(max(chanlocs(idx).Z / 85, -1), 1));
+            chanlocs(idx).sph_radius = 85;
+        else
+            chanlocs(idx).X = 0;
+            chanlocs(idx).Y = 0;
+            chanlocs(idx).Z = 85;
+            chanlocs(idx).theta = 0;
+            chanlocs(idx).radius = 0;
+            chanlocs(idx).sph_theta = 0;
+            chanlocs(idx).sph_phi = 90;
+            chanlocs(idx).sph_radius = 85;
+        end
+    end
 end
