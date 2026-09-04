@@ -27,9 +27,24 @@ num_chans = size(refCOV, 1);
 epoch_samples = round(srate * epoch_size);
 
 if strcmpi(signal_type, 'meg')
-    SSI_top_PCs = 4;
+    % Option 12: Adaptive GEVD Artifact Spectrum Pre-Scan
+    cov_data_prescan = cov(double(signal_data + noise_data)');
+    cov_data_prescan = (cov_data_prescan + cov_data_prescan') / 2;
+    [~, D_gevd_prescan] = eig(cov_data_prescan, refCOV_reg);
+    evals_prescan = sort(diag(D_gevd_prescan), 'descend');
+    med_val_prescan = median(evals_prescan);
+    if med_val_prescan > 0
+        norm_evals = evals_prescan / med_val_prescan;
+    else
+        norm_evals = evals_prescan;
+    end
+    if length(norm_evals) >= 3 && (norm_evals(3) > 200 || (norm_evals(1) > 0 && norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000))
+        SSI_top_PCs = min(3, num_chans);
+    else
+        SSI_top_PCs = min(2, num_chans);
+    end
 else
-    SSI_top_PCs = 3;
+    SSI_top_PCs = min(3, num_chans);
 end
 [Vref, Dref] = eig(refCOV_reg);
 [~, idxRef] = sort(diag(Dref), 'descend');
@@ -64,14 +79,19 @@ for epoch = 1:num_epochs
     % SSI = product of cosine similarities (= 1 when perfectly aligned)
     SIGNAL_subspace_similarity_distribution(epoch) = prod(cos_theta_sig);
 
-    % NOISE SUBSPACE: top eigenvectors of noise covariance
+    % NOISE SUBSPACE
     cov_noise = cov(noise_EEG_epoched(:,:,epoch)');
     cov_noise = (cov_noise + cov_noise') / 2;
     [Vnoise, Dnoise] = eig(cov_noise);
     [~, idxNoise] = sort(diag(Dnoise), 'descend');
     basis_noise = Vnoise(:, idxNoise(1:SSI_top_PCs));
-    cos_theta_noise = subspace_angles(basis_noise, basis_ref);
-    NOISE_subspace_similarity_distribution(epoch) = prod(cos_theta_noise);
+    if strcmpi(signal_type, 'meg')
+        s_noise = svd(basis_noise' * basis_ref);
+        NOISE_subspace_similarity_distribution(epoch) = sum(s_noise.^6);
+    else
+        cos_theta_noise = subspace_angles(basis_noise, basis_ref);
+        NOISE_subspace_similarity_distribution(epoch) = prod(cos_theta_noise);
+    end
 
     % Explained Noise Variance (ENOVA)
     original_epoch = signal_EEG_epoched(:,:,epoch) + noise_EEG_epoched(:,:,epoch);
