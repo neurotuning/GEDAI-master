@@ -132,7 +132,7 @@ if ~isinf(smoothing_window_seconds)
         
         % Check if component 3 has elevated power above baseline noise floor,
         % or if components 1 & 2 indicate broad multi-dipole distribution
-        if norm_evals(3) > 200 || (norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000)
+        if length(norm_evals) >= 3 && (norm_evals(3) > 200 || (norm_evals(1) > 0 && norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000))
             SSI_top_PCs = min(3, N_EEG_electrodes);
         else
             SSI_top_PCs = min(2, N_EEG_electrodes);
@@ -541,7 +541,7 @@ else
         
         % Check if component 3 has elevated power above baseline noise floor,
         % or if components 1 & 2 indicate broad multi-dipole distribution
-        if norm_evals(3) > 200 || (norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000)
+        if length(norm_evals) >= 3 && (norm_evals(3) > 200 || (norm_evals(1) > 0 && norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000))
             SSI_top_PCs = min(3, N_EEG_electrodes);
         else
             SSI_top_PCs = min(2, N_EEG_electrodes);

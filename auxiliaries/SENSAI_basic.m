@@ -38,7 +38,7 @@ if strcmpi(signal_type, 'meg')
     else
         norm_evals = evals_prescan;
     end
-    if norm_evals(3) > 200 || (norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000)
+    if length(norm_evals) >= 3 && (norm_evals(3) > 200 || (norm_evals(1) > 0 && norm_evals(2) / norm_evals(1) > 0.20 && norm_evals(1) < 12000))
         SSI_top_PCs = min(3, num_chans);
     else
         SSI_top_PCs = min(2, num_chans);
