@@ -1578,11 +1578,11 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                     raw_2d = double(EEGavRef.data(:, :));
                     C_emp = cov(raw_2d');
 
-                    % Compute clean guidance covariance (8-25 Hz band or lowest variance epochs)
+                    % Compute clean guidance covariance (8-20 Hz band or lowest variance epochs)
                     C_clean = [];
                     if exist('pop_eegfiltnew', 'file')
                         try
-                            EEG_clean = pop_eegfiltnew(EEGavRef, 'locutoff', 8, 'hicutoff', 25, 'plotfreqz', 0);
+                            EEG_clean = pop_eegfiltnew(EEGavRef, 'locutoff', 8, 'hicutoff', 20, 'plotfreqz', 0);
                             C_clean = cov(double(EEG_clean.data(:, :))');
                         catch
                             C_clean = [];
