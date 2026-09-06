@@ -174,22 +174,28 @@ if ~isinf(smoothing_window_seconds)
         
         switch optimization_type
             case 'parabolic'
-                [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
+                [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval_sub, Evec_sub, noise_multiplier, [], evecs_Template_cov, signal_type, SSI_top_PCs);
             case 'grid'
                 automatic_thresholding_step_size = 1/3;
                 AutomaticThresholdSweep = minThreshold:automatic_thresholding_step_size:maxThreshold;
                 SIGNAL_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 NOISE_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 SENSAI_score_sweep = zeros(1, length(AutomaticThresholdSweep));
+                valid_evals = Eval_sub(Eval_sub > 0);
+                if isempty(valid_evals)
+                    precomp_log_prctile = 0;
+                else
+                    precomp_log_prctile = prctile(log(valid_evals), 98);
+                end
                 if parallelize
                     parfor threshold_index=1:length(AutomaticThresholdSweep)
                         artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
-                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score_sweep(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
+                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score_sweep(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, [], evecs_Template_cov, signal_type, SSI_top_PCs, precomp_log_prctile);
                     end
                 else
                     for threshold_index=1:length(AutomaticThresholdSweep)
                         artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
-                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score_sweep(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
+                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score_sweep(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, [], evecs_Template_cov, signal_type, SSI_top_PCs, precomp_log_prctile);
                     end
                 end
                 [~, SENSAI_index] = max(SENSAI_score_sweep);
@@ -595,7 +601,7 @@ else
         
         switch optimization_type
             case 'parabolic'
-                [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
+                [optimal_artifact_threshold] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval_sub, Evec_sub, noise_multiplier, [], evecs_Template_cov, signal_type, SSI_top_PCs);
             
             case 'grid' % Restored grid search functionality
                 automatic_thresholding_step_size = 1/3;
@@ -604,17 +610,23 @@ else
                 SIGNAL_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 NOISE_subspace_similarity = zeros(1, length(AutomaticThresholdSweep));
                 SENSAI_score = zeros(1, length(AutomaticThresholdSweep));
+                valid_evals = Eval_sub(Eval_sub > 0);
+                if isempty(valid_evals)
+                    precomp_log_prctile = 0;
+                else
+                    precomp_log_prctile = prctile(log(valid_evals), 98);
+                end
                 if parallelize
                     parfor threshold_index=1:length(AutomaticThresholdSweep)
                         artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
                         % Call SENSAI function
-                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
+                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, [], evecs_Template_cov, signal_type, SSI_top_PCs, precomp_log_prctile);
                     end
                 else
                     for threshold_index=1:length(AutomaticThresholdSweep)
                         artifact_threshold_iter = AutomaticThresholdSweep(threshold_index);
                         % Call SENSAI function
-                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, COV_sub, evecs_Template_cov, signal_type, SSI_top_PCs);
+                        [SIGNAL_subspace_similarity(threshold_index), NOISE_subspace_similarity(threshold_index), SENSAI_score(threshold_index)] = SENSAI(artifact_threshold_iter, refCOV, Eval_sub, Evec_sub, noise_multiplier, [], evecs_Template_cov, signal_type, SSI_top_PCs, precomp_log_prctile);
                     end
                 end
                 [~, SENSAI_index] = max(SENSAI_score);

@@ -1,4 +1,4 @@
-function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier, cov_total, evecs_Template_cov, signal_type, SSI_top_PCs)
+function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier, cov_total, evecs_Template_cov, signal_type, SSI_top_PCs, precomputed_log_prctile)
 
                        %   Evaluates GEDAI cleaning quality for a given threshold.
 %%   Creative Commons License
@@ -48,17 +48,21 @@ all_indices = base_diag + (0 : num_epochs-1) * num_chans^2;
 all_diagonals = Eval(all_indices(:));
 magnitudes = abs(all_diagonals);
 all_evals_mat = reshape(magnitudes, num_chans, num_epochs);
-log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
 
 correction_factor = 1.00;
 T1 = correction_factor * (105 - artifact_threshold) / 100;
 
-if strcmpi(signal_type, 'eeg')
-    percentile_threshold = 98;
-elseif strcmpi(signal_type, 'meg')
-    percentile_threshold = 99;
+if nargin >= 10 && ~isempty(precomputed_log_prctile)
+    Treshold1 = T1 * precomputed_log_prctile;
+else
+    log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
+    if strcmpi(signal_type, 'eeg')
+        percentile_threshold = 98;
+    elseif strcmpi(signal_type, 'meg')
+        percentile_threshold = 99;
+    end
+    Treshold1 = T1 * prctile(log_Eig_val_all, percentile_threshold);
 end
-Treshold1 = T1 * prctile(log_Eig_val_all, percentile_threshold);
 threshold_val = exp(Treshold1 - 100);
 
 refCOV = real(refCOV);
@@ -68,8 +72,8 @@ reg_val = trace(refCOV) / num_chans;
 refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*reg_val*eye(num_chans, 'like', refCOV);
 refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
 
-% Precompute constant T
-T = refCOV_reg * Template_guess;
+% Precompute empty subspace overlap constant (scalar across all epochs with no artifacts)
+empty_subspace_sim = abs(det(Template_guess(1:M, :)));
 
 SIGNAL_subspace_similarity_distribution = zeros(1, num_epochs);
 NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
@@ -84,21 +88,21 @@ for epoch = 1:num_epochs
 
     % --- SIGNAL SUBSPACE ---
     if num_good >= M
-        % Fast associative path
+        % Fast associative path using direct VR projection (zero refCOV multiplications in QR loop)
         Evec_good = Evec(:, good_indices, epoch);
+        VR_good = refCOV_reg * Evec_good;
         d_good = current_evals(good_indices);
-        Y1_sig = refCOV_reg * (Evec_good * (d_good .* (Evec_good' * T)));
+        Y1_sig = VR_good * (d_good .* (VR_good' * Template_guess));
         [Q1_sig, ~] = qr(Y1_sig, 0);
-        T_sig = refCOV_reg * Q1_sig;
-        Y2_sig = refCOV_reg * (Evec_good * (d_good .* (Evec_good' * T_sig)));
+        Y2_sig = VR_good * (d_good .* (VR_good' * Q1_sig));
         [evecs_signal, ~] = qr(Y2_sig, 0);
         SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
     elseif num_good > 0
         % Fallback for rank-deficient signal
         Evec_good = Evec(:, good_indices, epoch);
+        VR_good = refCOV_reg * Evec_good;
         d_good = current_evals(good_indices);
-        V_good_rows = Evec_good' * refCOV_reg;
-        cov_signal = V_good_rows' * (V_good_rows .* d_good);
+        cov_signal = VR_good * (d_good .* VR_good');
         cov_signal = (cov_signal + cov_signal') / 2;
         Y1_sig = cov_signal * Template_guess;
         [Q1_sig, ~] = qr(Y1_sig, 0);
@@ -107,8 +111,7 @@ for epoch = 1:num_epochs
         SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
     else
         % No good components
-        evecs_signal = eye(num_chans, M);
-        SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
+        SIGNAL_subspace_similarity_distribution(epoch) = empty_subspace_sim;
     end
 
     % --- NOISE SUBSPACE ---
@@ -130,25 +133,25 @@ for epoch = 1:num_epochs
         % Uses 3D volume overlap so multi-component broadband artifacts
         % (EOG + EMG + NOISE) are thoroughly filtered without penalty accumulation.
         if num_bad >= M
-            % Fast associative path
+            % Fast associative path using direct VR projection (zero refCOV multiplications in QR loop)
             Evec_bad = Evec(:, bad_indices, epoch);
+            VR_bad = refCOV_reg * Evec_bad;
             d_bad = current_evals(bad_indices);
-            Y1_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T)));
+            Y1_noise = VR_bad * (d_bad .* (VR_bad' * Template_guess));
             [Q1_noise, ~] = qr(Y1_noise, 0);
-            T_noise = refCOV_reg * Q1_noise;
-            Y2_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_noise)));
+            Y2_noise = VR_bad * (d_bad .* (VR_bad' * Q1_noise));
             [evecs_noise, ~] = qr(Y2_noise, 0);
             NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
         elseif num_bad > 0
             % Fallback for rank-deficient noise
             Evec_bad = Evec(:, bad_indices, epoch);
+            VR_bad = refCOV_reg * Evec_bad;
             d_bad = current_evals(bad_indices);
-            V_bad_rows = Evec_bad' * refCOV_reg;
-            cov_noise = V_bad_rows' * (V_bad_rows .* d_bad);
+            cov_noise = VR_bad * (d_bad .* VR_bad');
             cov_noise = (cov_noise + cov_noise') / 2;
             
             if max(abs(cov_noise(:))) < tol
-                Y1_noise = eye(num_chans, M);
+                Y1_noise = Template_guess;
             else
                 Y1_noise = cov_noise * Template_guess;
             end
@@ -158,8 +161,7 @@ for epoch = 1:num_epochs
             NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
         else
             % No bad components
-            evecs_noise = eye(num_chans, M);
-            NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
+            NOISE_subspace_similarity_distribution(epoch) = empty_subspace_sim;
         end
     end
 end
