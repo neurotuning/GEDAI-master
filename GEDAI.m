@@ -123,7 +123,13 @@ end
 if nargin < 4 || isempty(lowcut_frequency)
     lowcut_frequency = 0.5; %  exclude all wavelet bands below this frequency (default = 0.5 Hz)
 end
-if nargin < 5 || isempty(ref_matrix_type)
+% Backward-compatibility: if 4th argument is ref_matrix_type (string, char, or non-scalar matrix)
+if ischar(lowcut_frequency) || isstring(lowcut_frequency) || (isnumeric(lowcut_frequency) && ~isscalar(lowcut_frequency))
+    if nargin >= 6, visualize_artifacts = parallelize; end
+    if nargin >= 5, parallelize = ref_matrix_type; end
+    ref_matrix_type = lowcut_frequency;
+    lowcut_frequency = 0.5;
+elseif nargin < 5 || isempty(ref_matrix_type)
     ref_matrix_type = 'precomputed';
 end
 if nargin < 6 || isempty(parallelize)
@@ -1561,11 +1567,11 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                     disp([newline 'GEDAI Leadfield model: Bayesian Optimized Warped Leadfield'])
                     nom_pos = [[EEGavRef.chanlocs.X]', [EEGavRef.chanlocs.Y]', [EEGavRef.chanlocs.Z]'];
 
-                    % Obtain baseline template (interpolated or precomputed)
+                    % Obtain baseline template (precomputed first if standard labels match, else interpolated)
                     try
-                        [G_template, G_full] = GEDAI_create_refCOV('interpolated', EEGin, EEGavRef, signal_type, internal_reference);
-                    catch
                         [G_template, G_full] = GEDAI_create_refCOV('precomputed', EEGin, EEGavRef, signal_type, internal_reference);
+                    catch
+                        [G_template, G_full] = GEDAI_create_refCOV('interpolated', EEGin, EEGavRef, signal_type, internal_reference);
                     end
 
                     % Compute broadband empirical covariance
@@ -1603,8 +1609,15 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                         end
                     end
 
+                    % Configure PlotFcn: display only if interactive desktop is running
+                    plot_fcn = {};
+                    if usejava('desktop')
+                        plot_fcn = {@plotObjectiveModel, @plotMinObjective};
+                    end
+
                     % Optimize Leadfield Gram matrix via Bayesian Optimization
-                    refCOV = optimize_gedai_leadfield_bayesopt(C_emp, C_clean, G_template, nom_pos, 'MaxObjectiveEvaluations', 35);
+                    refCOV = optimize_gedai_leadfield_bayesopt(C_emp, C_clean, G_template, nom_pos, ...
+                        'MaxObjectiveEvaluations', 35, 'PlotFcn', plot_fcn);
                 else
                     error(['CRITICAL: Channel locations are incomplete. ' ...
                            'Ensure all %d channels have X, Y, Z coordinates for BayesOpt.'], num_chans);

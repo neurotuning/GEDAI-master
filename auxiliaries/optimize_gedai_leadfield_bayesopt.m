@@ -34,7 +34,11 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
     addParameter(p, 'InitialPoints', 10, @isnumeric);
     addParameter(p, 'NoiseMultiplier', 3.0, @isnumeric);
     addParameter(p, 'TopPCs', 3, @isnumeric);
-    addParameter(p, 'PlotFcn', {@plotObjectiveModel, @plotMinObjective});
+    plot_default = {};
+    if usejava('desktop')
+        plot_default = {@plotObjectiveModel, @plotMinObjective};
+    end
+    addParameter(p, 'PlotFcn', plot_default);
     addParameter(p, 'Verbose', 1, @isnumeric);
     parse(p, C_emp, C_clean, G_template, nom_pos, varargin{:});
     opts = p.Results;
