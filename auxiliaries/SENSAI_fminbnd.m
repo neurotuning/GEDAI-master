@@ -1,47 +1,47 @@
 function [optimalThreshold, maxSENSAIScore] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs)
 
 max_number_of_epochs = 500; % if EEG recording is long (default = 500 epochs)
-number_of_epochs = size(COV, 3);
 
-if  number_of_epochs > max_number_of_epochs
-stream = RandStream('twister', 'Seed', 2);
-random_epochs = randperm(stream, number_of_epochs, max_number_of_epochs);
-% EEGdata_epoched removed
-Eval = Eval (:, :, random_epochs);
-Evec = Evec (:, :,random_epochs);
-% Also subset COV to match
-COV = COV(:,:,random_epochs);
-
+if ~isempty(COV)
+    number_of_epochs = size(COV, 3);
 else
+    number_of_epochs = size(Eval, 3);
 end
 
-sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov,signal_type, SSI_top_PCs);
+if number_of_epochs > max_number_of_epochs
+    stream = RandStream('twister', 'Seed', 2);
+    random_epochs = randperm(stream, number_of_epochs, max_number_of_epochs);
+    Eval = Eval(:, :, random_epochs);
+    Evec = Evec(:, :, random_epochs);
+    if ~isempty(COV)
+        COV = COV(:, :, random_epochs);
+    end
+end
+
+% Precompute log-percentile of eigenvalues once for all optimization iterations
+num_chans = size(refCOV, 1);
+num_epochs_sub = size(Eval, 3);
+base_diag = (1 : (num_chans + 1) : num_chans^2)';
+all_indices = base_diag + (0 : num_epochs_sub-1) * num_chans^2;
+magnitudes = abs(Eval(all_indices(:)));
+log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
+
+if strcmpi(signal_type, 'eeg')
+    percentile_threshold = 98;
+elseif strcmpi(signal_type, 'meg')
+    percentile_threshold = 99;
+else
+    percentile_threshold = 98;
+end
+precomputed_log_prctile = prctile(log_Eig_val_all, percentile_threshold);
+
+sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs, precomputed_log_prctile);
 [optimalThreshold, negMaxSENSAIScore] = local_fminbnd(sensaifunc, minThreshold, maxThreshold, 1e-2);
 maxSENSAIScore = -negMaxSENSAIScore;
 
-% % 1. Define the optimization variable (the threshold)
-% vars = optimizableVariable('threshold', [minThreshold, maxThreshold]);
-% 
-% % 2. Define the objective function
-% % bayesopt expects a function that takes a TABLE and returns the objective value
-% objFcn = @(tbl) sensaifunc(tbl.threshold);
-% 
-% % 3. Run the Bayesian Optimization
-% results = bayesopt(objFcn, vars, ...
-%     'MaxObjectiveEvaluations', 50, ... % Number of iterations
-%     'NumSeedPoints', 10, ...            % Initial random points
-%     'PlotFcn', [], ...                 % Set to {} to see progress plots
-%     'UseParallel', false, ...
-%     'Verbose', 0);                     % Set to 1 to see logs
-% 
-% % 4. Extract the results to match your original variables
-% optimalThreshold = results.XAtMinObjective.threshold;
-% negMaxSENSAIScore = results.MinObjective;
-
-
-    function objective = SENSAIObjective(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj,signal_type, SSI_top_PCs)
+    function objective = SENSAIObjective(artifact_threshold, refCOV_in, Eval_in, Evec_in, noise_multiplier_obj, cov_total, evecs_Template_cov_obj, signal_type_in, SSI_top_PCs_in, precomputed_log_prctile_in)
         % Compute the negative SENSAI score for the objective function
-        [~, ~, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj, signal_type, SSI_top_PCs);
+        [~, ~, SENSAI_score] = SENSAI(artifact_threshold, refCOV_in, Eval_in, Evec_in, noise_multiplier_obj, cov_total, evecs_Template_cov_obj, signal_type_in, SSI_top_PCs_in, precomputed_log_prctile_in);
         objective = -SENSAI_score;
     end
 end
