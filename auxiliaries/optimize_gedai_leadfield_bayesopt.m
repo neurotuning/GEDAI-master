@@ -1,12 +1,18 @@
 function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_bayesopt(C_emp, varargin)
 % OPTIMIZE_GEDAI_LEADFIELD_BAYESOPT
 % Optimizes a template Leadfield Gram matrix G to maximize the SENSAI metric
-% using Bayesian Optimization over 3D anisotropic sensor coordinate deformation.
+% using Bayesian Optimization over 3D anisotropic sensor coordinate deformation,
+% rigid 3D head translation inside the helmet (for MEG), and spectral shaping.
 %
-% If sensai_baseline >= BaselineSENSAIThreshold (default: 30%), the canonical
-% template is already physically sound; BayesOpt is skipped entirely, saving compute
-% and preserving 100% of peak baseline performance without artifact overfitting.
-% Only when sensai_baseline < 30% is BayesOpt triggered to rescue the outlier.
+% If sensai_baseline >= BaselineSENSAIThreshold, the canonical template is already
+% physically sound; BayesOpt is skipped entirely, saving compute (0.005s) and
+% preserving 100% of peak baseline performance without artifact overfitting.
+% Only when sensai_baseline < BaselineSENSAIThreshold is BayesOpt triggered.
+%
+% Modality Defaults:
+%   EEG: 3-DOF Spatial Scaling (sx, sy, sz in [0.90, 1.10]), BaselineSENSAIThreshold = 30.0%
+%   MEG: 7-DOF Model: 3D Scaling (sx, sy, sz) + Rigid Translation (tx, ty, tz in [-0.15, 0.15])
+%        + Spectral Exponent (tau in [0.85, 1.15]), BaselineSENSAIThreshold = 62.0%
 %
 % Signatures:
 %   [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_bayesopt(C_emp, G_template, nom_pos, ...)
@@ -15,13 +21,16 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
 % Inputs:
 %   C_emp      - (C x C) Full-bandwidth empirical covariance.
 %   G_template - (C x C) Canonical leadfield Gram matrix (L * L').
-%   nom_pos    - (C x 3) Nominal 3D Cartesian coordinates of the electrode array.
+%   nom_pos    - (C x 3) Nominal 3D Cartesian coordinates of the electrode/sensor array.
 %
 % Optional Name-Value Pairs:
-%   'BaselineSENSAIThreshold' - Threshold below which BayesOpt triggers (default: 30.0).
+%   'BaselineSENSAIThreshold' - Threshold below which BayesOpt triggers (default: 30% for EEG, 62% for MEG).
+%   'SignalType'              - Modality: 'eeg' or 'meg' (default: 'eeg').
 %   'MaxObjectiveEvaluations' - Max BayesOpt evaluations if triggered (default: 25).
 %   'InitialPoints'           - Initial seed evaluations (default: 5).
 %   'SpatialBounds'           - [min, max] coordinate scaling bounds (default: [0.90, 1.10]).
+%   'TranslationBounds'     - [min, max] normalized 3D translation bounds for MEG (default: [-0.15, 0.15]).
+%   'TauBounds'               - [min, max] spectral eigenvalue exponent bounds for MEG (default: [0.85, 1.15]).
 %   'NoiseMultiplier'         - Weight for noise penalty in SENSAI, matching SENSAI_basic (default: 1.0).
 %   'TopPCs'                  - Number of leadfield PCs for SSI (default: 3).
 %   'MinSENSAIImprovement'    - Minimum SENSAI % gain required to adopt warped model (default: 0.0).
@@ -29,8 +38,8 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
 %   'Verbose'                 - Display iteration logs (default: 0).
 %
 % Outputs:
-%   G_opt       - (C x C) Warped, scale-adapted leadfield Gram matrix.
-%   best_theta  - Table containing optimal warping hyperparameters (sx, sy, sz).
+%   G_opt       - (C x C) Adapted leadfield Gram matrix.
+%   best_theta  - Table containing optimal hyperparameters.
 %   best_sensai - Maximum SENSAI score achieved.
 %   results     - Full BayesianOptimization results object (or empty if skipped).
 
@@ -52,10 +61,13 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
     end
 
     p = inputParser;
-    addParameter(p, 'BaselineSENSAIThreshold', 30.0, @isnumeric);
+    addParameter(p, 'BaselineSENSAIThreshold', [], @(x) isempty(x) || isnumeric(x));
+    addParameter(p, 'SignalType', 'eeg', @(x) ischar(x) || isstring(x));
     addParameter(p, 'MaxObjectiveEvaluations', 25, @isnumeric);
     addParameter(p, 'InitialPoints', 5, @isnumeric);
     addParameter(p, 'SpatialBounds', [0.90, 1.10], @(x) isnumeric(x) && numel(x) == 2);
+    addParameter(p, 'TranslationBounds', [-0.15, 0.15], @(x) isnumeric(x) && numel(x) == 2);
+    addParameter(p, 'TauBounds', [0.85, 1.15], @(x) isnumeric(x) && numel(x) == 2);
     addParameter(p, 'NoiseMultiplier', 1.0, @isnumeric); % Default 1.0 matching SENSAI_basic
     addParameter(p, 'TopPCs', 3, @isnumeric);
     addParameter(p, 'MinSENSAIImprovement', 0.0, @isnumeric);
@@ -72,6 +84,21 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
     assert(isequal(size(G_template), [C, C]), 'G_template and C_emp must have matching dimensions.');
     assert(size(nom_pos, 1) == C, 'nom_pos must be C x 3 matching channel count.');
 
+    % Set modality-specific default threshold if not explicitly specified
+    if isempty(opts.BaselineSENSAIThreshold)
+        if strcmpi(opts.SignalType, 'meg')
+            if C > 150 % Gradiometers (typically 204 channels)
+                baseline_threshold = 30.0; % GRAD threshold (clean sits at 35-38%)
+            else % Magnetometers (typically 102 channels)
+                baseline_threshold = 62.0; % MAG threshold (outliers sit < 60%)
+            end
+        else
+            baseline_threshold = 30.0; % EEG threshold (outliers sit < 30%)
+        end
+    else
+        baseline_threshold = opts.BaselineSENSAIThreshold;
+    end
+
     % Symmetrize inputs
     C_emp = real((C_emp + C_emp') / 2);
     G_template = real((G_template + G_template') / 2);
@@ -81,40 +108,56 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
     G_nom_norm = G_template / trace(G_template);
 
     %% --- 1. Baseline SENSAI Evaluation (Canonical Leadfield) ---
-    % Evaluated using NoiseMultiplier = 1.0 (directly matching SENSAI_basic)
-    sensai_baseline = evaluate_sensai_single(G_nom_norm, C_emp_norm, opts.TopPCs, opts.NoiseMultiplier);
+    sensai_baseline = evaluate_sensai_single(G_nom_norm, C_emp_norm, opts.TopPCs, opts.NoiseMultiplier, opts.SignalType);
 
     %% --- 2. Threshold Safeguard on sensai_baseline ---
-    % If the canonical leadfield already achieves adequate alignment (sensai_baseline >= 30%),
-    % skip BayesOpt entirely. This saves compute time (0.005s) and prevents artifact overfitting.
-    if sensai_baseline >= opts.BaselineSENSAIThreshold
+    % If the canonical leadfield already achieves adequate alignment, skip BayesOpt entirely.
+    % Saves compute time (0.005s) and prevents artifact overfitting on clean/typical recordings.
+    if sensai_baseline >= baseline_threshold
         G_opt = G_template;
-        best_theta = table(1.0, 1.0, 1.0, 'VariableNames', {'sx', 'sy', 'sz'});
+        if strcmpi(opts.SignalType, 'eeg')
+            best_theta = table(1.0, 1.0, 1.0, 'VariableNames', {'sx', 'sy', 'sz'});
+        else
+            best_theta = table(1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, ...
+                'VariableNames', {'sx', 'sy', 'sz', 'tx', 'ty', 'tz', 'tau'});
+        end
         best_sensai = sensai_baseline;
         results = [];
         if opts.Verbose
             fprintf('\nCanonical leadfield retained: sensai_baseline = %.2f%% >= %.1f%%. BayesOpt skipped.\n', ...
-                sensai_baseline, opts.BaselineSENSAIThreshold);
+                sensai_baseline, baseline_threshold);
         end
         return;
     end
 
-    %% --- 3. Run BayesOpt to Rescue Outlier (sensai_baseline < 30%) ---
+    %% --- 3. Run BayesOpt to Rescue Outlier (sensai_baseline < threshold) ---
     if opts.Verbose
         fprintf('\nLow baseline SENSAI detected (%.2f%% < %.1f%%). Running BayesOpt to rescue leadfield...\n', ...
-            sensai_baseline, opts.BaselineSENSAIThreshold);
+            sensai_baseline, baseline_threshold);
     end
 
-    % 3D Anisotropic coordinate scaling (head elongation / cap stretch) constrained to +/- 10%
-    sx = optimizableVariable('sx', opts.SpatialBounds, 'Type', 'real');
-    sy = optimizableVariable('sy', opts.SpatialBounds, 'Type', 'real');
-    sz = optimizableVariable('sz', opts.SpatialBounds, 'Type', 'real');
-    vars = [sx, sy, sz];
+    if strcmpi(opts.SignalType, 'eeg')
+        % EEG: 3D Anisotropic coordinate scaling (head elongation / cap stretch)
+        sx = optimizableVariable('sx', opts.SpatialBounds, 'Type', 'real');
+        sy = optimizableVariable('sy', opts.SpatialBounds, 'Type', 'real');
+        sz = optimizableVariable('sz', opts.SpatialBounds, 'Type', 'real');
+        vars = [sx, sy, sz];
+        init_baseline = table(1.0, 1.0, 1.0, 'VariableNames', {'sx', 'sy', 'sz'});
+    else
+        % MEG: 3D Scaling + Rigid Head Translation in Helmet + Spectral Exponent
+        sx = optimizableVariable('sx', opts.SpatialBounds, 'Type', 'real');
+        sy = optimizableVariable('sy', opts.SpatialBounds, 'Type', 'real');
+        sz = optimizableVariable('sz', opts.SpatialBounds, 'Type', 'real');
+        tx = optimizableVariable('tx', opts.TranslationBounds, 'Type', 'real');
+        ty = optimizableVariable('ty', opts.TranslationBounds, 'Type', 'real');
+        tz = optimizableVariable('tz', opts.TranslationBounds, 'Type', 'real');
+        tau = optimizableVariable('tau', opts.TauBounds, 'Type', 'real');
+        vars = [sx, sy, sz, tx, ty, tz, tau];
+        init_baseline = table(1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, ...
+            'VariableNames', {'sx', 'sy', 'sz', 'tx', 'ty', 'tz', 'tau'});
+    end
 
-    % Warm-start anchor: canonical template at (1.0, 1.0, 1.0)
-    init_baseline = table(1.0, 1.0, 1.0, 'VariableNames', {'sx', 'sy', 'sz'});
-
-    objFun = @(params) evaluate_sensai_cost(params, C_emp_norm, G_nom_norm, nom_pos, opts.TopPCs, opts.NoiseMultiplier);
+    objFun = @(params) evaluate_sensai_cost(params, C_emp_norm, G_nom_norm, nom_pos, opts.TopPCs, opts.NoiseMultiplier, opts.SignalType);
 
     results = bayesopt(objFun, vars, ...
         'InitialX', init_baseline, ...
@@ -130,12 +173,17 @@ function [G_opt, best_theta, best_sensai, results] = optimize_gedai_leadfield_ba
 
     %% --- 4. Gating Safeguard: Verify Improvement Over Canonical Template ---
     if delta_sensai > opts.MinSENSAIImprovement
-        G_warped = generate_warped_gram(best_theta.sx, best_theta.sy, best_theta.sz, G_nom_norm, nom_pos);
+        G_warped = generate_adapted_gram(best_theta, G_nom_norm, nom_pos);
         G_opt = G_warped * (trace(G_template) / trace(G_warped));
         if opts.Verbose
-            fprintf('\nWarped leadfield adopted: SENSAI improved by +%.2f%% (%.2f%% -> %.2f%%)\n', ...
+            fprintf('\nAdapted leadfield adopted: SENSAI improved by +%.2f%% (%.2f%% -> %.2f%%)\n', ...
                 delta_sensai, sensai_baseline, best_sensai);
-            fprintf('Optimal scales: Sx=%.3f, Sy=%.3f, Sz=%.3f\n', best_theta.sx, best_theta.sy, best_theta.sz);
+            if strcmpi(opts.SignalType, 'eeg')
+                fprintf('Optimal scales: Sx=%.3f, Sy=%.3f, Sz=%.3f\n', best_theta.sx, best_theta.sy, best_theta.sz);
+            else
+                fprintf('Optimal MEG params: Sx=%.3f, Sy=%.3f, Sz=%.3f, Tx=%.3f, Ty=%.3f, Tz=%.3f, Tau=%.3f\n', ...
+                    best_theta.sx, best_theta.sy, best_theta.sz, best_theta.tx, best_theta.ty, best_theta.tz, best_theta.tau);
+            end
         end
     else
         G_opt = G_template;
@@ -155,17 +203,20 @@ end
 %% INTERNAL FUNCTIONS
 %% =========================================================================
 
-function cost = evaluate_sensai_cost(params, C_emp, G_nom, nom_pos, n_pc, noise_multiplier)
+function cost = evaluate_sensai_cost(params, C_emp, G_nom, nom_pos, n_pc, noise_multiplier, signal_type)
     try
-        G_warped = generate_warped_gram(params.sx, params.sy, params.sz, G_nom, nom_pos);
-        score = evaluate_sensai_single(G_warped, C_emp, n_pc, noise_multiplier);
+        G_warped = generate_adapted_gram(params, G_nom, nom_pos);
+        score = evaluate_sensai_single(G_warped, C_emp, n_pc, noise_multiplier, signal_type);
         cost = -score;
     catch
         cost = 1e4; % Penalty on numerical instability
     end
 end
 
-function sensai_score = evaluate_sensai_single(G_target, C_emp, n_pc, noise_multiplier)
+function sensai_score = evaluate_sensai_single(G_target, C_emp, n_pc, noise_multiplier, signal_type)
+    if nargin < 5 || isempty(signal_type)
+        signal_type = 'eeg';
+    end
     C_dim = size(G_target, 1);
     G_target = (G_target + G_target') / 2;
     G_reg = 0.95 * G_target + 0.05 * (trace(G_target) / C_dim) * eye(C_dim);
@@ -183,11 +234,25 @@ function sensai_score = evaluate_sensai_single(G_target, C_emp, n_pc, noise_mult
     Eval = diag(evals_sorted);
 
     % 3. Call MATLAB GEDAI's exact SENSAI optimization engine
-    [~, sensai_score] = SENSAI_fminbnd(-6, 12, G_reg, Eval, Evec, noise_multiplier, C_emp, evecs_Template, 'eeg', n_pc);
+    [~, sensai_score] = SENSAI_fminbnd(-6, 12, G_reg, Eval, Evec, noise_multiplier, C_emp, evecs_Template, signal_type, n_pc);
 end
 
-function G_w = generate_warped_gram(sx, sy, sz, G_nom, nom_pos)
+function Gw = generate_adapted_gram(theta, G_nom, nom_pos)
     C = size(G_nom, 1);
+
+    % Parameter extraction with safe defaults
+    sx = 1.0; sy = 1.0; sz = 1.0;
+    tx = 0.0; ty = 0.0; tz = 0.0;
+    tau = 1.0;
+
+    names = theta.Properties.VariableNames;
+    if ismember('sx', names), sx = theta.sx; end
+    if ismember('sy', names), sy = theta.sy; end
+    if ismember('sz', names), sz = theta.sz; end
+    if ismember('tx', names), tx = theta.tx; end
+    if ismember('ty', names), ty = theta.ty; end
+    if ismember('tz', names), tz = theta.tz; end
+    if ismember('tau', names), tau = theta.tau; end
 
     % Normalize coordinates by mean head radius for dimensionless scale invariance
     R_head = mean(sqrt(sum(nom_pos.^2, 2)));
@@ -196,7 +261,9 @@ function G_w = generate_warped_gram(sx, sy, sz, G_nom, nom_pos)
     else
         pos_orig = nom_pos;
     end
-    pos_warped = pos_orig .* [sx, sy, sz];
+
+    % 1. Spatial deformation: Translation + Scaling
+    pos_warped = (pos_orig + [tx, ty, tz]) .* [sx, sy, sz];
 
     dist_orig = pdist2(pos_orig, pos_orig);
     dist_target = pdist2(pos_orig, pos_warped);
@@ -206,9 +273,18 @@ function G_w = generate_warped_gram(sx, sy, sz, G_nom, nom_pos)
     K_target = dist_target.^2 .* log(dist_target + eye(C));
 
     W_spatial = (K_target + 1e-3 * eye(C)) / (K_orig + 1e-3 * eye(C));
-    G_w = W_spatial * G_nom * W_spatial';
+    Gw = W_spatial * G_nom * W_spatial';
+
+    % 2. Spectral power-law eigenvalue shaping (tau)
+    if tau ~= 1.0
+        [Vg, Dg] = eig((Gw + Gw') / 2);
+        [dg, idx] = sort(diag(Dg), 'descend');
+        Vg = Vg(:, idx);
+        dg = max(dg, 1e-12);
+        Gw = Vg * diag(dg.^tau) * Vg';
+    end
 
     % Symmetrize and trace-normalize
-    G_w = (G_w + G_w') / 2;
-    G_w = G_w / trace(G_w);
+    Gw = (Gw + Gw') / 2;
+    Gw = Gw / trace(Gw);
 end
