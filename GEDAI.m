@@ -1577,38 +1577,6 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                     % Compute broadband empirical covariance
                     raw_2d = double(EEGavRef.data(:, :));
                     C_emp = cov(raw_2d');
-
-                    % Compute clean guidance covariance (8-20 Hz band or lowest variance epochs)
-                    C_clean = [];
-                    if exist('pop_eegfiltnew', 'file')
-                        try
-                            EEG_clean = pop_eegfiltnew(EEGavRef, 'locutoff', 8, 'hicutoff', 20, 'plotfreqz', 0);
-                            C_clean = cov(double(EEG_clean.data(:, :))');
-                        catch
-                            C_clean = [];
-                        end
-                    end
-                    if isempty(C_clean)
-                        ep_len = max(1, round(EEGavRef.srate));
-                        n_ep = floor(size(raw_2d, 2) / ep_len);
-                        if n_ep >= 3
-                            ep_vars = zeros(1, n_ep);
-                            for ep = 1:n_ep
-                                chunk = raw_2d(:, (ep-1)*ep_len+1 : ep*ep_len);
-                                ep_vars(ep) = sum(var(chunk, 0, 2));
-                            end
-                            [~, sort_v] = sort(ep_vars, 'ascend');
-                            clean_eps = sort_v(1:max(1, round(0.3 * n_ep)));
-                            clean_data = [];
-                            for ep = clean_eps
-                                clean_data = [clean_data, raw_2d(:, (ep-1)*ep_len+1 : ep*ep_len)];
-                            end
-                            C_clean = cov(clean_data');
-                        else
-                            C_clean = C_emp;
-                        end
-                    end
-
                     % Configure PlotFcn: display only if interactive desktop is running
                     plot_fcn = {};
                     if usejava('desktop')
@@ -1616,8 +1584,8 @@ function [refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef
                     end
 
                     % Optimize Leadfield Gram matrix via Bayesian Optimization
-                    refCOV = optimize_gedai_leadfield_bayesopt(C_emp, C_clean, G_template, nom_pos, ...
-                        'MaxObjectiveEvaluations', 35, 'PlotFcn', plot_fcn);
+                    refCOV = optimize_gedai_leadfield_bayesopt(C_emp, G_template, nom_pos, ...
+                        'MaxObjectiveEvaluations', 25, 'PlotFcn', plot_fcn, 'Verbose', 1);
                 else
                     error(['CRITICAL: Channel locations are incomplete. ' ...
                            'Ensure all %d channels have X, Y, Z coordinates for BayesOpt.'], num_chans);
