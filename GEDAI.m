@@ -1003,6 +1003,9 @@ if visualize_artifacts
         EEGclean_for_vis = GEDAI_apply_output_reference(EEGclean_for_vis, output_reference_channel);
         EEGavRef_for_vis = GEDAI_apply_output_reference(EEGavRef_for_vis, output_reference_channel);
     end
+    % Ensure channel mask matches the actual channels displayed by GEDAI
+    EEGclean_for_vis.etc.clean_channel_mask = true(1, size(EEGclean_for_vis.data, 1));
+    EEGavRef_for_vis.etc.clean_channel_mask = true(1, size(EEGavRef_for_vis.data, 1));
     if ~isempty(regions)
         clean_sample_mask = true(1, EEGclean_for_vis.pnts);
         for i = 1:size(regions, 1)
@@ -1011,6 +1014,20 @@ if visualize_artifacts
         EEGclean_for_vis.etc.clean_sample_mask = clean_sample_mask;
         EEGclean_for_vis.data = EEGclean_for_vis.data(:, clean_sample_mask);
         EEGclean_for_vis.pnts = size(EEGclean_for_vis.data, 2);
+    else
+        % Clear any stale sample masks from prior toolboxes (e.g. clean_rawdata)
+        if isfield(EEGclean_for_vis.etc, 'clean_sample_mask')
+            EEGclean_for_vis.etc = rmfield(EEGclean_for_vis.etc, 'clean_sample_mask');
+        end
+        if isfield(EEGavRef_for_vis.etc, 'clean_sample_mask')
+            EEGavRef_for_vis.etc = rmfield(EEGavRef_for_vis.etc, 'clean_sample_mask');
+        end
+        if isfield(EEGclean_for_vis.etc, 'cumsum_mask')
+            EEGclean_for_vis.etc = rmfield(EEGclean_for_vis.etc, 'cumsum_mask');
+        end
+        if isfield(EEGavRef_for_vis.etc, 'cumsum_mask')
+            EEGavRef_for_vis.etc = rmfield(EEGavRef_for_vis.etc, 'cumsum_mask');
+        end
     end
     vis_artifacts(EEGclean_for_vis, EEGavRef_for_vis, 'ScaleBy', 'noscale', 'YScaling', 5*mad(EEGclean_for_vis.data(:)));
 end
