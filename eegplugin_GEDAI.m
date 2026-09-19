@@ -1,5 +1,5 @@
 
-% [Generalized Eigenvalue De-Artifacting Intrument (GEDAI)]
+% [Generalized Eigenvalue De-Artifacting Instrument (GEDAI) v 1.8]
 % PolyForm Noncommercial License 1.0.0
 % https://polyformproject.org/licenses/noncommercial/1.0.0
 %
@@ -15,7 +15,7 @@
 
 function vers=eegplugin_GEDAI(fig, try_strings, catch_strings)
 % version
-vers = 'GEDAI v1.7 - May 2026';
+vers = 'GEDAI v1.8 - September 2026';
 
 g = fileparts(which('eegplugin_GEDAI'));
 addpath(fullfile(g, 'auxiliaries'));

@@ -4,7 +4,7 @@ function varargout = process_gedai( varargin )
 % USAGE:                sProcess = process_gedai('GetDescription')
 %                       OutputFiles = process_gedai('Run', sProcess, sInputs)
 
-% [Generalized Eigenvalue De-Artifacting Instrument (GEDAI) v 1.7]
+% [Generalized Eigenvalue De-Artifacting Instrument (GEDAI) v 1.8]
 % PolyForm Noncommercial License 1.0.0
 % https://polyformproject.org/licenses/noncommercial/1.0.0
 %
