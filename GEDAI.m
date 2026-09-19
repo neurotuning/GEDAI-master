@@ -203,6 +203,27 @@ reference_mode = GEDAI_normalize_reference_mode(output_reference_channel);
 if strcmp(signal_type, 'meg'), reference_mode = 'None'; end
 internal_reference = reference_mode;
 
+% Check if the requested reference electrode is flat in the input data or external to chanlocs
+has_flat_recording_ref = false;
+is_external_recording_ref = false;
+flat_ref_labels = {};
+external_ref_label = '';
+if isfield(EEGin, 'chanlocs') && ~isempty(EEGin.chanlocs)
+    spec_initial = GEDAI_create_reference_spec(EEGin.chanlocs, reference_mode);
+    if spec_initial.is_external_ref
+        is_external_recording_ref = true;
+        external_ref_label = spec_initial.external_ref_label;
+    elseif ~isempty(spec_initial.required_channel_indices)
+        EEG_data_2D_check = reshape(EEGin.data, size(EEGin.data, 1), []);
+        channel_diff_std_check = std(diff(EEG_data_2D_check(spec_initial.required_channel_indices, :), 1, 2), 0, 2);
+        flat_sub_idx = find(channel_diff_std_check < 1e-7);
+        if ~isempty(flat_sub_idx)
+            has_flat_recording_ref = true;
+            flat_ref_labels = {EEGin.chanlocs(spec_initial.required_channel_indices(flat_sub_idx)).labels};
+        end
+    end
+end
+
 p = fileparts(which('GEDAI'));
 addpath(fullfile(p, 'auxiliaries'));
 tStart = tic;
@@ -221,6 +242,16 @@ if ENOVA_threshold_per_channel < inf
     EEG_data_2D = reshape(EEGin.data, size(EEGin.data, 1), []);
     channel_diff_std = std(diff(EEG_data_2D, 1, 2), 0, 2);
     flat_channels = find(channel_diff_std < flat_tolerance);
+
+    % If the selected reference channel is flat because it is the online recording reference,
+    % do not mark it as a defective channel to remove; retain it for leadfield reference alignment.
+    if has_flat_recording_ref
+        ref_channels_flat = intersect(flat_channels, spec_initial.required_channel_indices);
+        if ~isempty(ref_channels_flat)
+            flat_channels = setdiff(flat_channels, ref_channels_flat);
+            disp(['Note: Reference channel(s) ' strjoin(flat_ref_labels, ', ') ' detected as flat recording reference; retaining for ' reference_mode ' leadfield alignment.']);
+        end
+    end
 
     if ~isempty(flat_channels)
         disp(['Found ' num2str(length(flat_channels)) ' flat channel(s). They will be automatically excluded.']);
@@ -349,6 +380,11 @@ if ENOVA_threshold_per_channel < inf
         EEGclean.etc.GEDAI.ENOVA_per_channel = ENOVA_per_channel_val;
         EEGclean.etc.GEDAI.bad_channels_removed = channels_to_remove;
         EEGclean.etc.GEDAI.mean_ENOVA = mean_ENOVA;
+        if has_flat_recording_ref
+            EEGclean.etc.GEDAI.flat_recording_reference = strjoin(flat_ref_labels, ', ');
+        elseif is_external_recording_ref
+            EEGclean.etc.GEDAI.external_recording_reference = external_ref_label;
+        end
 
         ENOVA_per_channel = ENOVA_per_channel_val; % Provide output variable
 
@@ -452,6 +488,14 @@ if ENOVA_threshold_per_channel < inf
             end
         end
 
+        if ~silent_mode && num_channels_rejected == 0
+            if has_flat_recording_ref
+                GEDAI_warn_flat_recording_reference(flat_ref_labels, reference_mode);
+            elseif is_external_recording_ref
+                GEDAI_warn_external_recording_reference(external_ref_label);
+            end
+        end
+
         return; % End here for two-pass
     end
 end
@@ -529,7 +573,7 @@ bands_to_zero = find(upper_bounds <= lowcut_frequency);
 if ~isempty(bands_to_zero)
     % Robust execution order: GPU(Double) -> GPU(Single) -> CPU(Double) -> CPU(Single)
     success = false;
-    warning('off');
+    warn_state_wavelet = warning('off');
 
     % Attempt GPU Processing
     if gpuDeviceCount > 0
@@ -593,6 +637,7 @@ if ~isempty(bands_to_zero)
             clear data_cpu low_freq_noise;
         end
     end
+    warning(warn_state_wavelet);
 end
 
 %% ------------------ GEDAI Broadband------------------------------
@@ -1227,6 +1272,11 @@ EEGclean.etc.GEDAI.ENOVA_per_channel = ENOVA_per_channel;
 EEGclean.etc.GEDAI.epochs_rejected = num_rejected;
 EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
+if has_flat_recording_ref
+    EEGclean.etc.GEDAI.flat_recording_reference = strjoin(flat_ref_labels, ', ');
+elseif is_external_recording_ref
+    EEGclean.etc.GEDAI.external_recording_reference = external_ref_label;
+end
 if exist('samples_to_keep', 'var')
     EEGclean.etc.GEDAI.samples_to_keep = samples_to_keep;
 else
@@ -1281,6 +1331,14 @@ if ~isempty(applied_reference_label)
     EEGclean.etc.GEDAI.output_reference_channel = applied_reference_label;
 end
 
+if ~silent_mode && num_channels_rejected == 0
+    if has_flat_recording_ref
+        GEDAI_warn_flat_recording_reference(flat_ref_labels, reference_mode);
+    elseif is_external_recording_ref
+        GEDAI_warn_external_recording_reference(external_ref_label);
+    end
+end
+
 end
 
 function [EEG, applied_reference_label] = GEDAI_apply_output_reference(EEG, output_reference_channel)
@@ -1310,7 +1368,7 @@ function spec = GEDAI_create_reference_spec(chanlocs, mode)
 mode = GEDAI_normalize_reference_mode(mode);
 if isempty(chanlocs), error('GEDAI:MissingChannelLocations','Reference creation requires chanlocs.'); end
 n = length(chanlocs); labels = {chanlocs.labels};
-spec = struct('mode',mode,'label','','is_rest',false,'R',eye(n),'required_channel_indices',[]);
+spec = struct('mode',mode,'label','','is_rest',false,'is_external_ref',false,'external_ref_label','','R',eye(n),'required_channel_indices',[]);
 switch lower(mode)
     case 'none', spec.label = 'none';
     case 'avgref'
@@ -1318,26 +1376,63 @@ switch lower(mode)
     case 'rest'
         spec.is_rest = true; spec.label = 'REST';
     case 'tp9tp10'
-        idx = GEDAI_find_reference_indices(labels,{'TP9','TP10'}); w=zeros(n,1); w(idx)=0.5;
-        spec.R=eye(n)-ones(n,1)*w'; spec.label='TP9+TP10(avg)'; spec.required_channel_indices=idx;
+        idx = GEDAI_find_reference_indices(labels,{'TP9','TP10'},false);
+        if all(idx > 0)
+            w=zeros(n,1); w(idx)=0.5;
+            spec.R=eye(n)-ones(n,1)*w'; spec.label='TP9+TP10(avg)'; spec.required_channel_indices=idx;
+        else
+            spec.is_external_ref = true; spec.external_ref_label = 'TP9TP10'; spec.label = 'TP9+TP10(avg)';
+        end
     case 'm1m2'
-        idx = GEDAI_find_reference_indices(labels,{'M1','M2'}); w=zeros(n,1); w(idx)=0.5;
-        spec.R=eye(n)-ones(n,1)*w'; spec.label='M1+M2(avg)'; spec.required_channel_indices=idx;
+        idx = GEDAI_find_reference_indices(labels,{'M1','M2'},false);
+        if all(idx > 0)
+            w=zeros(n,1); w(idx)=0.5;
+            spec.R=eye(n)-ones(n,1)*w'; spec.label='M1+M2(avg)'; spec.required_channel_indices=idx;
+        else
+            spec.is_external_ref = true; spec.external_ref_label = 'M1M2'; spec.label = 'M1+M2(avg)';
+        end
     case 'a1a2'
-        idx = GEDAI_find_reference_indices(labels,{'A1','A2'}); w=zeros(n,1); w(idx)=0.5;
-        spec.R=eye(n)-ones(n,1)*w'; spec.label='A1+A2(avg)'; spec.required_channel_indices=idx;
+        idx = GEDAI_find_reference_indices(labels,{'A1','A2'},false);
+        if all(idx > 0)
+            w=zeros(n,1); w(idx)=0.5;
+            spec.R=eye(n)-ones(n,1)*w'; spec.label='A1+A2(avg)'; spec.required_channel_indices=idx;
+        else
+            spec.is_external_ref = true; spec.external_ref_label = 'A1A2'; spec.label = 'A1+A2(avg)';
+        end
     otherwise
-        idx = GEDAI_find_reference_indices(labels,{mode}); w=zeros(n,1); w(idx)=1;
-        spec.R=eye(n)-ones(n,1)*w'; spec.label=chanlocs(idx).labels; spec.required_channel_indices=idx;
+        idx = GEDAI_find_reference_indices(labels,{mode},false);
+        if idx > 0
+            w=zeros(n,1); w(idx)=1;
+            spec.R=eye(n)-ones(n,1)*w'; spec.label=chanlocs(idx).labels; spec.required_channel_indices=idx;
+        else
+            [is_std, std_name] = GEDAI_is_standard_template_channel(mode);
+            if is_std
+                spec.is_external_ref = true;
+                spec.external_ref_label = std_name;
+                spec.label = std_name;
+                spec.required_channel_indices = [];
+                spec.R = eye(n); % Sensor data was already recorded relative to this reference
+            else
+                error('GEDAI:ReferenceChannelNotFound','Required reference channel "%s" was not found in dataset channels or standard 10-05 montages.', mode);
+            end
+        end
 end
 end
 
-function idx = GEDAI_find_reference_indices(labels, requested)
+function idx = GEDAI_find_reference_indices(labels, requested, error_if_missing)
+if nargin < 3, error_if_missing = true; end
 idx=zeros(1,length(requested));
 for k=1:length(requested)
     found=find(strcmpi(strtrim(labels),requested{k}),1);
-    if isempty(found), error('GEDAI:ReferenceChannelNotFound','Required reference channel "%s" was not found.',requested{k}); end
-    idx(k)=found;
+    if isempty(found)
+        if error_if_missing
+            error('GEDAI:ReferenceChannelNotFound','Required reference channel "%s" was not found.',requested{k});
+        else
+            idx(k)=0;
+        end
+    else
+        idx(k)=found;
+    end
 end
 end
 
@@ -1380,7 +1475,18 @@ end
 
 function G_ref = GEDAI_apply_leadfield_reference(G_raw,chanlocs,mode)
 spec=GEDAI_create_reference_spec(chanlocs,mode);
-if spec.is_rest, G_ref=G_raw; else, G_ref=spec.R*G_raw; end
+if spec.is_rest
+    G_ref=G_raw;
+elseif spec.is_external_ref
+    [is_std, G_std] = GEDAI_lookup_template_leadfield(spec.external_ref_label);
+    if is_std && ~isempty(G_std)
+        G_ref = G_raw - ones(size(G_raw, 1), 1) * G_std;
+    else
+        error('GEDAI:ExternalReferenceLeadfieldNotFound', 'Could not locate standard leadfield for external reference: %s.', spec.external_ref_label);
+    end
+else
+    G_ref=spec.R*G_raw;
+end
 end
 
 function EEG = GEDAI_set_reference_metadata(EEG,mode)
@@ -1428,10 +1534,31 @@ switch lower(char(ref_matrix_type))
     case 'warped'
         n=length(EEGavRef.chanlocs);
         if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
-        [~,tr]=coregister(EEGin.chanlocs,'standard_1005.elc','manual','off');
-        EEGin=pop_dipfit_settings(EEGin,'hdmfile','standard_vol.mat','mrifile','standard_mri.mat','chanfile','standard_1005.elc','coordformat','MNI','coord_transform',tr);
-        EEGin=pop_leadfield(EEGin,'sourcemodel','head_modelColin27_5003_Standard-10-5-Cap339.mat','sourcemodel2mni',[0 -24 -45 0 0 -1.5708 1000 1000 1000],'downsample',1);
-        G_raw=cell2mat(EEGin.dipfit.sourcemodel.leadfield); G_full=GEDAI_apply_leadfield_reference(G_raw,EEGavRef.chanlocs,internal_reference);
+        
+        spec_warp = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+        EEGin_lf = EEGin;
+        if spec_warp.is_external_ref
+            ref_loc = sanitize_and_fill_chanlocs(struct('labels', spec_warp.external_ref_label));
+            EEGin_lf.chanlocs(end+1) = ref_loc;
+            EEGin_lf.nbchan = length(EEGin_lf.chanlocs);
+            if ~isempty(EEGin_lf.data)
+                EEGin_lf.data(end+1, :) = 0;
+            end
+        end
+        
+        [~,tr]=coregister(EEGin_lf.chanlocs,'standard_1005.elc','manual','off');
+        EEGin_lf=pop_dipfit_settings(EEGin_lf,'hdmfile','standard_vol.mat','mrifile','standard_mri.mat','chanfile','standard_1005.elc','coordformat','MNI','coord_transform',tr);
+        EEGin_lf=pop_leadfield(EEGin_lf,'sourcemodel','head_modelColin27_5003_Standard-10-5-Cap339.mat','sourcemodel2mni',[0 -24 -45 0 0 -1.5708 1000 1000 1000],'downsample',1);
+        G_all=cell2mat(EEGin_lf.dipfit.sourcemodel.leadfield);
+        
+        if spec_warp.is_external_ref
+            G_ref_row = G_all(end, :);
+            G_raw = G_all(1:n, :);
+            G_full = G_raw - ones(n, 1) * G_ref_row;
+        else
+            G_raw = G_all;
+            G_full = GEDAI_apply_leadfield_reference(G_raw,EEGavRef.chanlocs,internal_reference);
+        end
     otherwise
         error('GEDAI:UnknownReferenceMatrixType','Unknown ref_matrix_type: %s',char(ref_matrix_type));
 end
@@ -1520,6 +1647,74 @@ for idx = 1:length(chanlocs)
         chanlocs(idx).sph_theta = 0;
         chanlocs(idx).sph_phi = 90;
         chanlocs(idx).sph_radius = 85;
+    end
+end
+end
+
+function GEDAI_warn_flat_recording_reference(flat_ref_labels, ~)
+labels_str = strjoin(flat_ref_labels, ', ');
+msg = sprintf('Retained flat recording reference channel %s (0 uV).', labels_str);
+fprintf(2, '\nWarning: %s\n', msg);
+warning('GEDAI:FlatRecordingReferenceKept', '%s', msg);
+end
+
+function GEDAI_warn_external_recording_reference(external_ref_label)
+msg = sprintf('Aligned leadfield to external recording reference channel %s; EEG sensor data retained in original reference space.', external_ref_label);
+fprintf(2, '\nWarning: %s\n', msg);
+warning('GEDAI:ExternalRecordingReferenceUsed', '%s', msg);
+end
+
+function [is_std, matched_name] = GEDAI_is_standard_template_channel(channel_label)
+is_std = false; matched_name = '';
+p_aux = fileparts(which('GEDAI'));
+L_path = fullfile(p_aux, 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat');
+if exist(L_path, 'file')
+    L_data = load(L_path, 'leadfield4GEDAI');
+    if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
+        tmpl = {L_data.leadfield4GEDAI.electrodes.Name};
+        f = find(strcmpi(strtrim(channel_label), tmpl), 1);
+        if ~isempty(f)
+            is_std = true; matched_name = tmpl{f}; return;
+        end
+    end
+end
+elc_path = fullfile(p_aux, 'auxiliaries', 'standard_1005.elc');
+if exist(elc_path, 'file')
+    try
+        locs = readlocs(elc_path, 'filetype', 'elc');
+        f = find(strcmpi(strtrim(channel_label), {locs.labels}), 1);
+        if ~isempty(f)
+            is_std = true; matched_name = locs(f).labels; return;
+        end
+    catch
+    end
+end
+end
+
+function [is_std, G_std] = GEDAI_lookup_template_leadfield(channel_label)
+is_std = false; G_std = [];
+p_aux = fileparts(which('GEDAI'));
+L_path = fullfile(p_aux, 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat');
+if exist(L_path, 'file')
+    L_data = load(L_path, 'leadfield4GEDAI');
+    if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
+        tmpl = {L_data.leadfield4GEDAI.electrodes.Name};
+        Gain = L_data.leadfield4GEDAI.Gain;
+        if strcmpi(channel_label, 'M1M2')
+            i1 = find(strcmpi(tmpl, 'M1'), 1); i2 = find(strcmpi(tmpl, 'M2'), 1);
+            if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
+        elseif strcmpi(channel_label, 'TP9TP10')
+            i1 = find(strcmpi(tmpl, 'TP9'), 1); i2 = find(strcmpi(tmpl, 'TP10'), 1);
+            if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
+        elseif strcmpi(channel_label, 'A1A2')
+            i1 = find(strcmpi(tmpl, 'A1'), 1); i2 = find(strcmpi(tmpl, 'A2'), 1);
+            if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
+        else
+            f = find(strcmpi(strtrim(channel_label), tmpl), 1);
+            if ~isempty(f)
+                is_std = true; G_std = Gain(f, :); return;
+            end
+        end
     end
 end
 end
