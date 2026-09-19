@@ -1525,12 +1525,34 @@ switch lower(char(ref_matrix_type))
             end
         end
         if any(idx==0), error('GEDAI:ElectrodeLabelsNotFound','Electrode labels not found: %s.',strjoin(labels(idx==0),', ')); end
-        G_raw=L.leadfield4GEDAI.Gain(idx,:); G_full=GEDAI_apply_leadfield_reference(G_raw,EEGin.chanlocs,internal_reference);
+        if strcmpi(internal_reference, 'AvgRef')
+            G_343_av = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
+            G_full = G_343_av(idx, :);
+            refCOV = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
+            refCOV = real((refCOV + refCOV') / 2);
+            return;
+        elseif strcmpi(internal_reference, 'REST')
+            G_full = L.leadfield4GEDAI.Gain(idx, :);
+            refCOV = L.leadfield4GEDAI.gram_matrix(idx, idx);
+            refCOV = real((refCOV + refCOV') / 2);
+            return;
+        else
+            G_raw = L.leadfield4GEDAI.Gain(idx, :);
+            G_full = GEDAI_apply_leadfield_reference(G_raw, EEGin.chanlocs, internal_reference);
+        end
     case 'interpolated'
         n=length(EEGavRef.chanlocs);
         if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
-        L=load('fsavLEADFIELD_4_GEDAI.mat'); lf=L.leadfield4GEDAI.EEG; lf.data=L.leadfield4GEDAI.Gain;
-        tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs); G_full=GEDAI_apply_leadfield_reference(tmp.data,EEGavRef.chanlocs,internal_reference);
+        L=load('fsavLEADFIELD_4_GEDAI.mat'); lf=L.leadfield4GEDAI.EEG;
+        if strcmpi(internal_reference, 'AvgRef')
+            lf.data = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
+            tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
+            G_full=tmp.data;
+        else
+            lf.data = L.leadfield4GEDAI.Gain;
+            tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
+            G_full=GEDAI_apply_leadfield_reference(tmp.data,EEGavRef.chanlocs,internal_reference);
+        end
     case 'warped'
         n=length(EEGavRef.chanlocs);
         if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
