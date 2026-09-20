@@ -1,4 +1,4 @@
-function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier, cov_total, evecs_Template_cov, signal_type, SSI_top_PCs)
+function [SIGNAL_subspace_similarity, NOISE_subspace_similarity, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier, cov_total, evecs_Template_cov, signal_type, SSI_top_PCs, lambda_reg)
 
                        %   Evaluates GEDAI cleaning quality for a given threshold.
 %%   Creative Commons License
@@ -63,7 +63,11 @@ threshold_val = exp(Treshold1 - 100);
 
 refCOV = real(refCOV);
 refCOV = (refCOV + refCOV') / 2;
-regularization_lambda = 0.05;
+if nargin < 10 || isempty(lambda_reg)
+    regularization_lambda = 0.05;
+else
+    regularization_lambda = lambda_reg;
+end
 reg_val = trace(refCOV) / num_chans;
 refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*reg_val*eye(num_chans, 'like', refCOV);
 refCOV_reg = (refCOV_reg + refCOV_reg') / 2;

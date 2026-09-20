@@ -47,6 +47,17 @@
 %                                 Altenatively, you can input a "custom" covariance matrix
 %                                 (with dimensions channel x channel) via a matlab variable
 %
+%   gamma_empirical             - Hyperparameter vector for blending the theoretical leadfield
+%                                 with empirical residual network reference covariance per frequency
+%                                 band:
+%                                   refCOV{b} = (1 - gamma_b)*ref_leadfield + gamma_b*ref_empirical{b}
+%                                 Default is the empirically validated optimal profile across
+%                                 9 bands (Broadband + 8 wavelet scales):
+%                                   gamma* = [0.50, 0.00, 0.00, 0.50, 0.50, 0.00, 0.20, 0.35, 0.10]
+%                                 Set to 0 (or zeros(1,9)) to disable empirical blending and use
+%                                 pure theoretical BEM leadfield. Can be passed in varargin or
+%                                 options struct.
+%
 %
 %   parallelize                    - Boolean for using parallel ('multicore') processing
 %
@@ -135,32 +146,42 @@ if nargin < 9 || isempty(ENOVA_threshold_per_channel)
     ENOVA_threshold_per_channel = inf; % If empty, set to infinity to disable rejection
 end
 
-% Parse hidden internal arguments:
+% Default empirical residual network blending weights (optimal gamma per band)
+default_gamma_empirical = [0.50, 0.00, 0.00, 0.50, 0.50, 0.00, 0.20, 0.35, 0.10];
+gamma_empirical = default_gamma_empirical;
+lambda_reg = 0.05; % Default reference covariance regularization parameter
+
+% Parse hidden internal arguments and optional hyperparameters:
 % 1) output reference channel label (char/string)
 % 2) precomputed_ENOVA_per_epoch (numeric vector) for Pass 2 recursion
+% 3) gamma_empirical (numeric vector/scalar) or options struct
 precomputed_ENOVA_per_epoch = [];
 output_reference_channel = '';
-if ~isempty(varargin)
-    for vargIdx = 1:length(varargin)
-        currentArg = varargin{vargIdx};
-        if (ischar(currentArg) || (isstring(currentArg) && isscalar(currentArg))) && isempty(output_reference_channel)
-            output_reference_channel = char(currentArg);
-        elseif isnumeric(currentArg) && ~isscalar(currentArg) && isempty(precomputed_ENOVA_per_epoch)
-            precomputed_ENOVA_per_epoch = currentArg;
-        end
-    end
-    output_reference_channel = strtrim(output_reference_channel);
-end
-
 original_channel_threshold = ENOVA_threshold_per_channel;
 silent_mode = false;
 num_channels_rejected = 0;
 total_original_channels = size(EEGin.data, 1);
 
 if ~isempty(varargin)
-    for vargIdx = 1:length(varargin)
+    vargIdx = 1;
+    while vargIdx <= length(varargin)
         currentArg = varargin{vargIdx};
-        if isstruct(currentArg)
+        if ischar(currentArg) || (isstring(currentArg) && isscalar(currentArg))
+            strArg = lower(strtrim(char(currentArg)));
+            if strcmp(strArg, 'gamma_empirical') && vargIdx < length(varargin)
+                vargIdx = vargIdx + 1;
+                gamma_empirical = varargin{vargIdx};
+            elseif strcmp(strArg, 'use_empirical_prior') && vargIdx < length(varargin)
+                vargIdx = vargIdx + 1;
+                if ~varargin{vargIdx}
+                    gamma_empirical = zeros(1, 9);
+                else
+                    gamma_empirical = default_gamma_empirical;
+                end
+            elseif isempty(output_reference_channel) && ~ismember(strArg, {'gamma_empirical', 'use_empirical_prior'})
+                output_reference_channel = char(currentArg);
+            end
+        elseif isstruct(currentArg)
             if isfield(currentArg, 'silent')
                 silent_mode = currentArg.silent;
             end
@@ -169,9 +190,71 @@ if ~isempty(varargin)
                 num_channels_rejected = currentArg.num_channels_rejected;
                 total_original_channels = currentArg.total_original_channels;
             end
+            if isfield(currentArg, 'gamma_empirical')
+                gamma_empirical = currentArg.gamma_empirical;
+            end
+            if isfield(currentArg, 'lambda_reg')
+                lambda_reg = currentArg.lambda_reg;
+            end
+            if isfield(currentArg, 'regularization_lambda')
+                lambda_reg = currentArg.regularization_lambda;
+            end
+            if isfield(currentArg, 'use_empirical_prior')
+                if ~currentArg.use_empirical_prior
+                    gamma_empirical = zeros(1, 9);
+                else
+                    gamma_empirical = default_gamma_empirical;
+                end
+            end
+        elseif isnumeric(currentArg)
+            if isscalar(currentArg)
+                if currentArg == 0
+                    gamma_empirical = zeros(1, 9);
+                else
+                    gamma_empirical = repmat(currentArg, 1, 9);
+                end
+            elseif length(currentArg) == 9 && isempty(precomputed_ENOVA_per_epoch)
+                gamma_empirical = currentArg;
+            elseif isempty(precomputed_ENOVA_per_epoch)
+                precomputed_ENOVA_per_epoch = currentArg;
+            end
+        elseif islogical(currentArg) && isscalar(currentArg)
+            if ~currentArg
+                gamma_empirical = zeros(1, 9);
+            else
+                gamma_empirical = default_gamma_empirical;
+            end
         end
+        vargIdx = vargIdx + 1;
+    end
+    output_reference_channel = strtrim(output_reference_channel);
+end
+
+% Normalize gamma_empirical to a 1x9 double vector
+if isempty(gamma_empirical)
+    gamma_empirical = default_gamma_empirical;
+elseif islogical(gamma_empirical)
+    if isscalar(gamma_empirical)
+        if gamma_empirical, gamma_empirical = default_gamma_empirical; else, gamma_empirical = zeros(1, 9); end
+    else
+        gamma_empirical = double(gamma_empirical);
+    end
+elseif isnumeric(gamma_empirical)
+    if isscalar(gamma_empirical)
+        if gamma_empirical == 0
+            gamma_empirical = zeros(1, 9);
+        else
+            gamma_empirical = repmat(gamma_empirical, 1, 9);
+        end
+    elseif length(gamma_empirical) < 9
+        tmp_g = default_gamma_empirical;
+        tmp_g(1:length(gamma_empirical)) = gamma_empirical;
+        gamma_empirical = tmp_g;
+    elseif length(gamma_empirical) > 9
+        gamma_empirical = gamma_empirical(1:9);
     end
 end
+gamma_empirical = reshape(double(gamma_empirical), 1, 9);
 
 if nargin < 10 || isempty(signal_type)
     % Auto-detect signal_type from channel types if available
@@ -270,8 +353,18 @@ if ENOVA_threshold_per_channel < inf
 
         ref_matrix_type_p1 = ref_matrix_type;
         if ~ischar(ref_matrix_type_p1)
-            ref_matrix_type_p1(flat_channels, :) = [];
-            ref_matrix_type_p1(:, flat_channels) = [];
+            if iscell(ref_matrix_type_p1)
+                for c_idx = 1:length(ref_matrix_type_p1)
+                    ref_matrix_type_p1{c_idx}(flat_channels, :) = [];
+                    ref_matrix_type_p1{c_idx}(:, flat_channels) = [];
+                end
+            elseif ndims(ref_matrix_type_p1) == 3
+                ref_matrix_type_p1(flat_channels, :, :) = [];
+                ref_matrix_type_p1(:, flat_channels, :) = [];
+            else
+                ref_matrix_type_p1(flat_channels, :) = [];
+                ref_matrix_type_p1(:, flat_channels) = [];
+            end
         end
     else
         ref_matrix_type_p1 = ref_matrix_type;
@@ -279,7 +372,7 @@ if ENOVA_threshold_per_channel < inf
 
     % Run GEDAI with channel rejection disabled (inf) to identify bad channels
     % Also disable epoch rejection in pass 1 so channel variance isn't computed on incomplete data
-    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, struct('silent', true));
+    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, struct('silent', true, 'gamma_empirical', gamma_empirical));
 
     clear EEGclean_p1 EEGartifacts_p1; % Free memory
 
@@ -311,8 +404,18 @@ if ENOVA_threshold_per_channel < inf
         % Update reference matrix if it's a custom matrix
         if ~ischar(ref_matrix_type)
             ref_matrix_type_reduced = ref_matrix_type;
-            ref_matrix_type_reduced(channels_to_remove, :) = [];
-            ref_matrix_type_reduced(:, channels_to_remove) = [];
+            if iscell(ref_matrix_type_reduced)
+                for c_idx = 1:length(ref_matrix_type_reduced)
+                    ref_matrix_type_reduced{c_idx}(channels_to_remove, :) = [];
+                    ref_matrix_type_reduced{c_idx}(:, channels_to_remove) = [];
+                end
+            elseif ndims(ref_matrix_type_reduced) == 3
+                ref_matrix_type_reduced(channels_to_remove, :, :) = [];
+                ref_matrix_type_reduced(:, channels_to_remove, :) = [];
+            else
+                ref_matrix_type_reduced(channels_to_remove, :) = [];
+                ref_matrix_type_reduced(:, channels_to_remove) = [];
+            end
         else
             ref_matrix_type_reduced = ref_matrix_type;
         end
@@ -321,7 +424,7 @@ if ENOVA_threshold_per_channel < inf
         disp([newline '--- PASS 2: Processing reduced data with global epoch thresholds ---']);
         [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = ...
             GEDAI(EEG_reduced, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_reduced, parallelize, false, ENOVA_threshold_per_epoch, inf, signal_type, smoothing_window_seconds, output_reference_channel, ENOVA_per_epoch_p1, ...
-            struct('original_channel_threshold', original_channel_threshold, 'num_channels_rejected', length(channels_to_remove), 'total_original_channels', size(EEGin.data, 1)));
+            struct('original_channel_threshold', original_channel_threshold, 'num_channels_rejected', length(channels_to_remove), 'total_original_channels', size(EEGin.data, 1), 'gamma_empirical', gamma_empirical));
 
         % --- INTERPOLATION ---
         disp([newline '--- INTERPOLATING BAD CHANNELS ---']);
@@ -353,7 +456,7 @@ if ENOVA_threshold_per_channel < inf
             EEGorig_ref = EEGin;
             EEGorig_ref.data = original_data_kept;
             if strcmpi(reference_mode, 'REST')
-                [~, G_full_final] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGin, signal_type, reference_mode);
+                [~, G_full_final] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGin, signal_type, reference_mode, gamma_empirical);
                 EEGclean = GEDAI_apply_data_reference(EEGclean, reference_mode, G_full_final);
                 EEGorig_ref = GEDAI_apply_data_reference(EEGorig_ref, reference_mode, G_full_final);
             elseif strcmpi(reference_mode, 'AvgRef')
@@ -382,7 +485,8 @@ if ENOVA_threshold_per_channel < inf
         EEGclean.etc.GEDAI.mean_ENOVA = mean_ENOVA;
         if has_flat_recording_ref
             EEGclean.etc.GEDAI.flat_recording_reference = strjoin(flat_ref_labels, ', ');
-        elseif is_external_recording_ref
+        end
+        if is_external_recording_ref
             EEGclean.etc.GEDAI.external_recording_reference = external_ref_label;
         end
 
@@ -394,12 +498,16 @@ if ENOVA_threshold_per_channel < inf
         else
             ref_matrix_type_str = ref_matrix_type;
         end
+        extra_com = '';
+        if any(gamma_empirical ~= default_gamma_empirical)
+            extra_com = sprintf(', ''gamma_empirical'', %s', mat2str(gamma_empirical));
+        end
         if isempty(output_reference_channel)
-            com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
+            com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s%s);', ...
+                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), extra_com);
         else
-            com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+            com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s''%s);', ...
+                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel, extra_com);
         end
 
         % Optional output re-reference to a user-specified channel label
@@ -421,7 +529,7 @@ if ENOVA_threshold_per_channel < inf
                 end
 
                 if strcmpi(reference_mode, 'REST')
-                    [~, G_full_for_vis] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av_for_vis, signal_type, reference_mode);
+                    [~, G_full_for_vis] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av_for_vis, signal_type, reference_mode, gamma_empirical);
                     EEGavRef_for_vis = GEDAI_apply_data_reference(EEGin, reference_mode, G_full_for_vis);
                 else
                     EEGavRef_for_vis = EEG_av_for_vis;
@@ -431,12 +539,14 @@ if ENOVA_threshold_per_channel < inf
             end
 
             % Create refCOV for full channel space
-            refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference);
+            refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference, gamma_empirical);
 
             if ~isempty(refCOV_full)
                 vis_pcs = 3;
                 sensai_epoch_size = 1;
-                visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
+                refCOV_full_score = refCOV_full;
+                if iscell(refCOV_full), refCOV_full_score = refCOV_full{1}; elseif ndims(refCOV_full) == 3, refCOV_full_score = refCOV_full(:, :, 1); end
+                visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full_score, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
                 EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
             end
 
@@ -545,7 +655,11 @@ else
 end
 
 %% Create Reference Covariance Matrix (refCOV)
-[refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+[refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference, gamma_empirical);
+
+if any(gamma_empirical > 0) && iscell(refCOV) && ~silent_mode
+    disp([newline 'Applied frequency-tuned empirical reference covariance (alpha/beta/broadband gamma = 0.50)']);
+end
 
 if strcmpi(reference_mode, 'REST')
     EEGavRef = GEDAI_apply_data_reference(EEGin, reference_mode, G_full);
@@ -575,8 +689,9 @@ if ~isempty(bands_to_zero)
     success = false;
     warn_state_wavelet = warning('off');
 
-    % Attempt GPU Processing
-    if gpuDeviceCount > 0
+    % Attempt GPU Processing (disabled inside parallel pool workers to prevent CUDA concurrency collisions)
+    in_worker = ~isempty(getCurrentTask());
+    if gpuDeviceCount > 0 && ~in_worker
         try
             disp('Attempting GPU processing (Double Precision)...');
             parallel.gpu.enableCUDAForwardCompatibility(true)
@@ -671,7 +786,7 @@ else
 end
 refCOV_bb = refCOV;
 if iscell(refCOV), refCOV_bb = refCOV{1}; elseif ndims(refCOV) == 3, refCOV_bb = refCOV(:, :, 1); end
-[cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV_bb, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
+[cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV_bb, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds, lambda_reg);
 
 
 
@@ -811,6 +926,7 @@ if parallelize
         const_chanlocs   = parallel.pool.Constant(EEGavRef.chanlocs);
         const_epoch_sz   = parallel.pool.Constant(epoch_sizes_per_wavelet_band);
         const_band_mins  = parallel.pool.Constant(band_min_thresholds);
+        const_lambda_reg = parallel.pool.Constant(lambda_reg);
 
         % MEMORY OPTIMIZED: Incremental band extraction in parallel
         parfor f = 1:num_bands_to_process
@@ -828,11 +944,11 @@ if parallelize
                 current_refCOV = const_refCOV.Value;
             end
             try
-                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds, const_lambda_reg.Value);
             catch ME
                 % If OOM or other memory error, try single precision
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds, const_lambda_reg.Value);
             end
 
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -877,11 +993,11 @@ if ~parallelize || ~success_parallel
             end
             try
                 disp(['processing wavelet band = ' num2str(f)])
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds, lambda_reg);
 
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds, lambda_reg);
             end
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -908,7 +1024,7 @@ if ~parallelize || ~success_parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
 
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds, lambda_reg);
             disp(['processing wavelet band (single) = ' num2str(f)])
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -947,7 +1063,7 @@ if ENOVA_threshold_per_epoch < inf
     if ~isempty(precomputed_ENOVA_per_epoch)
         ENOVA_per_epoch = precomputed_ENOVA_per_epoch;
     else
-        [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch_internal] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, sensai_epoch_size, refCOV_score, noise_multiplier, signal_type);
+        [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch_internal] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, sensai_epoch_size, refCOV_score, noise_multiplier, signal_type, lambda_reg);
         ENOVA_per_epoch = ENOVA_per_epoch_internal;
     end
 else
@@ -1007,12 +1123,16 @@ tEnd = toc(tStart);
 if ~ischar(ref_matrix_type)
     ref_matrix_type = 'custom';
 end
+extra_com = '';
+if any(gamma_empirical ~= default_gamma_empirical)
+    extra_com = sprintf(', ''gamma_empirical'', %s', mat2str(gamma_empirical));
+end
 if isempty(output_reference_channel)
-    com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
+    com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s%s);', ...
+        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), extra_com);
 else
-    com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+    com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s''%s);', ...
+        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel, extra_com);
 end
 
 if visualize_artifacts
@@ -1159,7 +1279,7 @@ end
 
 % Calculate final SENSAI score (after potential epoch rejection)
 
-[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, 1, refCOV_score, noise_multiplier, signal_type);
+[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, 1, refCOV_score, noise_multiplier, signal_type, lambda_reg);
 
 % disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
 % disp(['Mean ENOVA: ' num2str(round(mean_ENOVA, 2, 'significant'))]);
@@ -1539,8 +1659,9 @@ if ~isempty(spec.required_channel_indices) && any(ismember(spec.required_channel
 end
 end
 
-function [refCOV,G_full] = GEDAI_create_refCOV(ref_matrix_type,EEGin,EEGavRef,signal_type,internal_reference)
+function [refCOV,G_full] = GEDAI_create_refCOV(ref_matrix_type,EEGin,EEGavRef,signal_type,internal_reference,gamma_empirical)
 if nargin<5 || isempty(internal_reference), internal_reference='AvgRef'; end
+if nargin<6 || isempty(gamma_empirical), gamma_empirical=[0.50, 0.00, 0.00, 0.50, 0.50, 0.00, 0.20, 0.35, 0.10]; end
 internal_reference=GEDAI_normalize_reference_mode(internal_reference); G_full=[];
 if iscell(ref_matrix_type)
     refCOV = ref_matrix_type; disp([newline 'Using custom frequency-dependent covariance matrices']);
@@ -1599,18 +1720,73 @@ switch lower(char(ref_matrix_type))
         if strcmpi(internal_reference, 'AvgRef')
             G_343_av = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
             G_full = G_343_av(idx, :);
-            refCOV = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
-            refCOV = real((refCOV + refCOV') / 2);
-            return;
+            ref_base = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
         elseif strcmpi(internal_reference, 'REST')
             G_full = L.leadfield4GEDAI.Gain(idx, :);
-            refCOV = L.leadfield4GEDAI.gram_matrix(idx, idx);
-            refCOV = real((refCOV + refCOV') / 2);
-            return;
+            ref_base = L.leadfield4GEDAI.gram_matrix(idx, idx);
         else
             G_raw = L.leadfield4GEDAI.Gain(idx, :);
             G_full = GEDAI_apply_leadfield_reference(G_raw, EEGin.chanlocs, internal_reference);
+            ref_base = G_full * G_full';
         end
+        ref_base = real((ref_base + ref_base') / 2);
+
+        % If empirical prior is disabled or non-EEG, return standard 2D refCOV
+        use_emp = any(gamma_empirical > 0) && strcmpi(signal_type, 'eeg');
+        if ~use_emp
+            refCOV = ref_base;
+            return;
+        end
+
+        % Load precomputed empirical residual networks
+        p_aux = fileparts(which('GEDAI'));
+        net_file = fullfile(p_aux, 'auxiliaries', 'GEDAI_empirical_residual_networks.mat');
+        if ~exist(net_file, 'file')
+            warning('GEDAI:EmpiricalNetworksNotFound', 'Could not locate GEDAI_empirical_residual_networks.mat. Falling back to theoretical leadfield.');
+            refCOV = ref_base;
+            return;
+        end
+        net_data = load(net_file, 'GEDAI_networks');
+        N = net_data.GEDAI_networks;
+
+        n_chans = length(idx);
+        scale_base = n_chans / trace(ref_base);
+        ref_base_norm = ref_base * scale_base;
+
+        % Check if channels match the 27 benchmark channels exactly
+        is_bear_27 = (n_chans == 27) && isfield(N, 'C_27_avref') && ...
+                     all(cellfun(@(x) any(strcmpi(x, N.chanlocs_27)), labels));
+
+        refCOV = cell(1, 9);
+        for b = 1:9
+            g = gamma_empirical(min(b, length(gamma_empirical)));
+            if g == 0
+                refCOV{b} = ref_base;
+            else
+                if is_bear_27 && strcmpi(internal_reference, 'AvgRef')
+                    [~, chan_order] = ismember(lower(labels), lower(N.chanlocs_27));
+                    c_emp = N.C_27_avref{b}(chan_order, chan_order);
+                else
+                    if strcmpi(internal_reference, 'AvgRef')
+                        c_emp = N.C_343_avref{b}(idx, idx);
+                    else
+                        c_emp = N.C_343_raw{b}(idx, idx);
+                        if ~strcmpi(internal_reference, 'REST')
+                            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+                            c_emp = spec.R * c_emp * spec.R';
+                        end
+                    end
+                end
+                c_emp = real((c_emp + c_emp') / 2);
+                if trace(c_emp) > 0
+                    c_emp = c_emp * (n_chans / trace(c_emp));
+                end
+
+                c_blend = (1 - g) * ref_base_norm + g * c_emp;
+                refCOV{b} = real((c_blend + c_blend') / 2);
+            end
+        end
+        return;
     case 'interpolated'
         n=length(EEGavRef.chanlocs);
         if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end

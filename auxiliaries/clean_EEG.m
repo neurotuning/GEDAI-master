@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, artifact_threshold_out] = clean_EEG(EEGdata_epoched, srate, epoch_size, artifact_threshold_in, refCOV, Eval, Evec, cosine_weights, signal_type, global_start_epoch_idx, global_total_epochs)
+function [cleaned_data, artifacts_data, artifact_threshold_out] = clean_EEG(EEGdata_epoched, srate, epoch_size, artifact_threshold_in, refCOV, Eval, Evec, cosine_weights, signal_type, global_start_epoch_idx, global_total_epochs, lambda_reg)
 %   This GEDAI function reconstructs the signal after removing artifactual components
 
 % --- PRE-ALLOCATION ---
@@ -65,7 +65,11 @@ Treshold1_array = T1_array * global_log_prctile;
 %% Compute Regularized Reference Covariance for fast linear system bypass
 refCOV = real(refCOV);
 refCOV = (refCOV + refCOV') / 2;
-regularization_lambda = 0.05;
+if nargin < 12 || isempty(lambda_reg)
+    regularization_lambda = 0.05;
+else
+    regularization_lambda = lambda_reg;
+end
 reg_val = trace(refCOV) / num_chans;
 refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*reg_val*eye(num_chans, 'like', refCOV);
 refCOV_reg = (refCOV_reg + refCOV_reg') / 2;

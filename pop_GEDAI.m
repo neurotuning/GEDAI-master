@@ -76,6 +76,7 @@ p.parse(varargin{:}); % Parse the input arguments
 uilist = { ...    
     {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' '                    auto|                    auto+|                    auto-'} ...
     {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' '          precomputed|          interpolated|          warped'} ...
+    {'style' 'text' 'string' 'Empirical network prior:'} {'style' 'checkbox' 'string' 'Enable frequency-tuned empirical prior (optimal gamma*)' 'tag' 'use_empirical_prior' 'Value' 1} ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency'} ...
     {'style' 'text' 'string' 'Sliding window (in seconds, Inf=whole file)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds'} ...
@@ -92,7 +93,7 @@ uilist = { ...
     {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1}, ...
     {'style' 'text' 'string' 'Artifact visualization:'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1}, ...
 };
-geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] };
+geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] };
 title = '  GEDAI denoising toolbox |  v1.8  ';
 
 % Get user input
@@ -149,6 +150,10 @@ selected_output_reference_channel = output_ref_value_options{selected_ref_popup_
 
 use_parallel = logical(out.parallel_processing);
 visualize_artifacts = logical(out.visualization_A);
+use_empirical_prior = true;
+if isfield(out, 'use_empirical_prior')
+    use_empirical_prior = logical(out.use_empirical_prior);
+end
 
 % Custom reference write-in takes precedence over popup selection if specified
 custom_ref_str = '';
@@ -166,7 +171,11 @@ else
     output_reference_channel = strtrim(selected_output_reference_channel);
 end
 
-[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
+if ~use_empirical_prior
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel, struct('use_empirical_prior', false));
+else
+    [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
+end
   
 EEG = eegh(com, EEG); % update EEG.history
     

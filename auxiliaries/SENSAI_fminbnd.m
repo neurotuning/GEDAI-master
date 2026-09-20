@@ -1,4 +1,4 @@
-function [optimalThreshold, maxSENSAIScore] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs)
+function [optimalThreshold, maxSENSAIScore] = SENSAI_fminbnd(minThreshold, maxThreshold, refCOV, Eval, Evec, noise_multiplier, COV, evecs_Template_cov, signal_type, SSI_top_PCs, lambda_reg)
 
 max_number_of_epochs = 500; % if EEG recording is long (default = 500 epochs)
 number_of_epochs = size(COV, 3);
@@ -41,7 +41,12 @@ maxSENSAIScore = -negMaxSENSAIScore;
 
     function objective = SENSAIObjective(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj,signal_type, SSI_top_PCs)
         % Compute the negative SENSAI score for the objective function
-        [~, ~, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj, signal_type, SSI_top_PCs);
+        if nargin < 11 || isempty(lambda_reg)
+            lam_val = 0.05;
+        else
+            lam_val = lambda_reg;
+        end
+        [~, ~, SENSAI_score] = SENSAI(artifact_threshold, refCOV, Eval, Evec, noise_multiplier_obj, cov_total, evecs_Template_cov_obj, signal_type, SSI_top_PCs, lam_val);
         objective = -SENSAI_score;
     end
 end

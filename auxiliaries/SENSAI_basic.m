@@ -11,13 +11,17 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [SENSAI_score, SIGNAL_subspace_similarity, NOISE_subspace_similarity, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(signal_data, noise_data, srate, epoch_size, refCOV, NOISE_multiplier, signal_type)
+function [SENSAI_score, SIGNAL_subspace_similarity, NOISE_subspace_similarity, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(signal_data, noise_data, srate, epoch_size, refCOV, NOISE_multiplier, signal_type, lambda_reg)
 
     %   Calculates the Signal & Noise Subspace Alignment Index (SENSAI) from raw EEG data
     
 refCOV = real(refCOV);
 refCOV = (refCOV + refCOV') / 2;
-regularization_lambda = 0.05;
+if nargin < 8 || isempty(lambda_reg)
+    regularization_lambda = 0.05;
+else
+    regularization_lambda = lambda_reg;
+end
 reg_val = trace(refCOV) / length(refCOV);
 refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*reg_val*eye(length(refCOV), 'like', refCOV);
 refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
