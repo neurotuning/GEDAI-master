@@ -669,7 +669,9 @@ if strcmpi(signal_type, 'meg')
 else
     broadband_maxThreshold = 12;
 end
-[cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
+refCOV_bb = refCOV;
+if iscell(refCOV), refCOV_bb = refCOV{1}; elseif ndims(refCOV) == 3, refCOV_bb = refCOV(:, :, 1); end
+[cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV_bb, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
 
@@ -818,12 +820,19 @@ if parallelize
             current_epoch_size = const_epoch_sz.Value(f);
             current_minThreshold = const_band_mins.Value(f);
 
+            if iscell(const_refCOV.Value)
+                current_refCOV = const_refCOV.Value{min(f + 1, length(const_refCOV.Value))};
+            elseif ndims(const_refCOV.Value) == 3
+                current_refCOV = const_refCOV.Value(:, :, min(f, size(const_refCOV.Value, 3)));
+            else
+                current_refCOV = const_refCOV.Value;
+            end
             try
-                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, const_refCOV.Value, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             catch ME
                 % If OOM or other memory error, try single precision
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, const_refCOV.Value, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
 
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -859,13 +868,20 @@ if ~parallelize || ~success_parallel
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
 
+            if iscell(refCOV)
+                current_refCOV = refCOV{min(f + 1, length(refCOV))};
+            elseif ndims(refCOV) == 3
+                current_refCOV = refCOV(:, :, min(f, size(refCOV, 3)));
+            else
+                current_refCOV = refCOV;
+            end
             try
                 disp(['processing wavelet band = ' num2str(f)])
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
 
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -924,11 +940,14 @@ EEGartifacts.data = EEGavRef.data(:, 1:size(EEGclean.data, 2)) - EEGclean.data;
 noise_multiplier = 1;
 sensai_epoch_size = 1;
 
+refCOV_score = refCOV;
+if iscell(refCOV), refCOV_score = refCOV{1}; elseif ndims(refCOV) == 3, refCOV_score = refCOV(:, :, 1); end
+
 if ENOVA_threshold_per_epoch < inf
     if ~isempty(precomputed_ENOVA_per_epoch)
         ENOVA_per_epoch = precomputed_ENOVA_per_epoch;
     else
-        [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch_internal] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, sensai_epoch_size, refCOV, noise_multiplier, signal_type);
+        [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch_internal] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, sensai_epoch_size, refCOV_score, noise_multiplier, signal_type);
         ENOVA_per_epoch = ENOVA_per_epoch_internal;
     end
 else
@@ -1140,7 +1159,7 @@ end
 
 % Calculate final SENSAI score (after potential epoch rejection)
 
-[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, 1, refCOV, noise_multiplier, signal_type);
+[SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, 1, refCOV_score, noise_multiplier, signal_type);
 
 % disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
 % disp(['Mean ENOVA: ' num2str(round(mean_ENOVA, 2, 'significant'))]);
@@ -1308,7 +1327,7 @@ end
 % Uses 50% overlapping 1-second epochs for denser coverage in the scatter plot
 if visualize_artifacts && ~isempty(refCOV)
     vis_pcs = 3;
-    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
+    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV_score, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
 
     % Store metrics in EEG.etc.GEDAI
     EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
@@ -1523,14 +1542,49 @@ end
 function [refCOV,G_full] = GEDAI_create_refCOV(ref_matrix_type,EEGin,EEGavRef,signal_type,internal_reference)
 if nargin<5 || isempty(internal_reference), internal_reference='AvgRef'; end
 internal_reference=GEDAI_normalize_reference_mode(internal_reference); G_full=[];
-if isnumeric(ref_matrix_type)
-    refCOV=ref_matrix_type; disp([newline 'Using custom covariance matrix']);
-    if ~strcmpi(internal_reference,'REST')
-        spec=GEDAI_create_reference_spec(EEGin.chanlocs,internal_reference);
-        if ~isequal(size(refCOV),[EEGin.nbchan EEGin.nbchan]), error('GEDAI:CustomCovDimensionMismatch','Custom refCOV dimensions must match EEG channels.'); end
-        refCOV=spec.R*refCOV*spec.R';
+if iscell(ref_matrix_type)
+    refCOV = ref_matrix_type; disp([newline 'Using custom frequency-dependent covariance matrices']);
+    if ~strcmpi(internal_reference, 'REST')
+        spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+        for c_idx = 1:length(refCOV)
+            mat_c = refCOV{c_idx};
+            if ~isequal(size(mat_c), [EEGin.nbchan EEGin.nbchan]), error('GEDAI:CustomCovDimensionMismatch','Custom refCOV dimensions must match EEG channels.'); end
+            refCOV{c_idx} = real((spec.R * mat_c * spec.R' + (spec.R * mat_c * spec.R')') / 2);
+        end
+    else
+        for c_idx = 1:length(refCOV)
+            mat_c = refCOV{c_idx};
+            refCOV{c_idx} = real((mat_c + mat_c') / 2);
+        end
     end
-    refCOV=real((refCOV+refCOV')/2); return;
+    return;
+end
+if isnumeric(ref_matrix_type)
+    if ndims(ref_matrix_type) == 3
+        refCOV = ref_matrix_type; disp([newline 'Using custom frequency-dependent 3D covariance array']);
+        if ~strcmpi(internal_reference, 'REST')
+            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+            for c_idx = 1:size(refCOV, 3)
+                mat_c = refCOV(:, :, c_idx);
+                if ~isequal(size(mat_c), [EEGin.nbchan EEGin.nbchan]), error('GEDAI:CustomCovDimensionMismatch','Custom refCOV dimensions must match EEG channels.'); end
+                refCOV(:, :, c_idx) = real((spec.R * mat_c * spec.R' + (spec.R * mat_c * spec.R')') / 2);
+            end
+        else
+            for c_idx = 1:size(refCOV, 3)
+                mat_c = refCOV(:, :, c_idx);
+                refCOV(:, :, c_idx) = real((mat_c + mat_c') / 2);
+            end
+        end
+        return;
+    else
+        refCOV=ref_matrix_type; disp([newline 'Using custom covariance matrix']);
+        if ~strcmpi(internal_reference,'REST')
+            spec=GEDAI_create_reference_spec(EEGin.chanlocs,internal_reference);
+            if ~isequal(size(refCOV),[EEGin.nbchan EEGin.nbchan]), error('GEDAI:CustomCovDimensionMismatch','Custom refCOV dimensions must match EEG channels.'); end
+            refCOV=spec.R*refCOV*spec.R';
+        end
+        refCOV=real((refCOV+refCOV')/2); return;
+    end
 end
 switch lower(char(ref_matrix_type))
     case 'precomputed'
