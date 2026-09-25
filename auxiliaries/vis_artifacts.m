@@ -152,7 +152,9 @@ new_iqr = 2*mad(quantile(new.data',1000),1)';
 new_iqr(isnan(new_iqr)) = deal(mean(new_iqr(~isnan(new_iqr))));
 
 % Get actual dimensions of expanded channel and sample spaces
-if isfield(new.etc, 'clean_channel_mask')
+if isfield(new.etc, 'clean_channel_mask') && isfield(new.etc, 'clean_sample_mask') && ...
+   islogical(new.etc.clean_channel_mask) && sum(new.etc.clean_channel_mask) == size(new.data, 1) && ...
+   islogical(new.etc.clean_sample_mask) && sum(new.etc.clean_sample_mask) == size(new.data, 2)
     new_nbchan = length(new.etc.clean_channel_mask);
     new_pnts = length(new.etc.clean_sample_mask);
 else
@@ -403,10 +405,12 @@ set(hFig, 'ResizeFcn', @on_window_resized);
     end
 
     function EEG = expand_rejections(EEG)
-        if ~isfield(EEG.etc,'clean_channel_mask')
-            EEG.etc.clean_channel_mask = true(1, size(EEG.data,1)); end
-        if ~isfield(EEG.etc,'clean_sample_mask')
-            EEG.etc.clean_sample_mask = true(1, size(EEG.data,2)); end
+        if ~isfield(EEG.etc,'clean_channel_mask') || ~islogical(EEG.etc.clean_channel_mask) || sum(EEG.etc.clean_channel_mask) ~= size(EEG.data,1)
+            EEG.etc.clean_channel_mask = true(1, size(EEG.data,1));
+        end
+        if ~isfield(EEG.etc,'clean_sample_mask') || ~islogical(EEG.etc.clean_sample_mask) || sum(EEG.etc.clean_sample_mask) ~= size(EEG.data,2)
+            EEG.etc.clean_sample_mask = true(1, size(EEG.data,2));
+        end
         EEG.etc.cumsum_mask = cumsum(EEG.etc.clean_sample_mask);
     end
 
@@ -468,7 +472,10 @@ end
 end
 
 function wnd_data = get_window_data(EEG, wndrange)
-    if isfield(EEG.etc, 'clean_sample_mask') && isfield(EEG.etc, 'cumsum_mask')
+    if isfield(EEG.etc, 'clean_sample_mask') && isfield(EEG.etc, 'cumsum_mask') && ...
+       isfield(EEG.etc, 'clean_channel_mask') && ...
+       islogical(EEG.etc.clean_channel_mask) && sum(EEG.etc.clean_channel_mask) == size(EEG.data, 1) && ...
+       islogical(EEG.etc.clean_sample_mask) && sum(EEG.etc.clean_sample_mask) == size(EEG.data, 2)
         wnd_data = nan(length(EEG.etc.clean_channel_mask), length(wndrange), 'like', EEG.data);
         max_len = length(EEG.etc.clean_sample_mask);
         in_bounds = (wndrange >= 1) & (wndrange <= max_len);

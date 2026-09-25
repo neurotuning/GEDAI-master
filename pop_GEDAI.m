@@ -46,6 +46,17 @@ if any(strcmp(channel_labels_lower, 'tp9')) && any(strcmp(channel_labels_lower, 
     output_ref_value_options{end+1} = '__GEDAI_REF_TP9TP10_AVG__';
 end
 
+% If EEG.ref specifies a known recording reference channel omitted from chanlocs, offer it in popup
+if isfield(EEG, 'ref') && (ischar(EEG.ref) || (isstring(EEG.ref) && isscalar(EEG.ref)))
+    rec_ref_str = strtrim(char(EEG.ref));
+    if ~isempty(rec_ref_str) && ~ismember(lower(rec_ref_str), {'average', 'avgref', 'common', 'rest', 'none', 'raw'})
+        if ~any(strcmpi(channel_labels, rec_ref_str))
+            output_ref_display_options{end+1} = [rec_ref_str ' (recording ref - leadfield only)'];
+            output_ref_value_options{end+1} = rec_ref_str;
+        end
+    end
+end
+
 % Add all individual channels.
 for chIdx = 1:numel(channel_labels_sanitized)
     output_ref_display_options{end+1} = channel_labels_sanitized{chIdx};
@@ -76,12 +87,13 @@ uilist = { ...
     {'style' 'text' 'string' 'Reject bad channels:'} {'style' 'checkbox' 'string' '' 'tag' 'reject_channels_by_enova' 'value' 0}, ...
     {} ...
     {'style' 'text' 'string' 'Output reference'} {'style' 'popupmenu' 'string' ref_channel_popup_options 'tag' 'output_reference_popup'}, ...
+    {'style' 'text' 'string' 'Recording reference channel (e.g. FCz; overrides above)'} {'style' 'edit' 'string' '' 'tag' 'custom_reference_channel'}, ...
     {} ...
     {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1}, ...
     {'style' 'text' 'string' 'Artifact visualization:'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1}, ...
 };
-geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1] [1, 1] [1, 1] };
-title = '  GEDAI denoising toolbox |  v1.7  ';
+geometry = { [1, 1] [1, 1] [1, 1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] [1] [1, 1] [1, 1] };
+title = '  GEDAI denoising toolbox |  v1.8  ';
 
 % Get user input
 [userInput, ~, ~, out] = inputgui( geometry, uilist, 'help(''GEDAI'')', title);
@@ -138,8 +150,21 @@ selected_output_reference_channel = output_ref_value_options{selected_ref_popup_
 use_parallel = logical(out.parallel_processing);
 visualize_artifacts = logical(out.visualization_A);
 
-% Popup-only behavior: index 1 is AvgRef; any other index applies channel re-reference.
-output_reference_channel = strtrim(selected_output_reference_channel);
+% Custom reference write-in takes precedence over popup selection if specified
+custom_ref_str = '';
+if isfield(out, 'custom_reference_channel') && ~isempty(out.custom_reference_channel)
+    if iscell(out.custom_reference_channel)
+        custom_ref_str = strtrim(out.custom_reference_channel{1});
+    else
+        custom_ref_str = strtrim(char(out.custom_reference_channel));
+    end
+end
+
+if ~isempty(custom_ref_str)
+    output_reference_channel = custom_ref_str;
+else
+    output_reference_channel = strtrim(selected_output_reference_channel);
+end
 
 [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
   
