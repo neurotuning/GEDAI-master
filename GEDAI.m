@@ -645,6 +645,10 @@ end
 
 % -- Ensure epoch size results in an even number of samples (for broadband)
 broadband_epoch_size = 1; % Note: IN SECONDS (this is now only the DEFAULT for broadband)
+% Ensure at least 2*C samples to avoid rank deficiency and ill-conditioning in high-density arrays
+min_bb_samples = min(ceil(2.0 * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
+broadband_epoch_size = max(broadband_epoch_size, min_bb_samples / EEGin.srate);
+
 if rem(broadband_epoch_size*EEGin.srate, 2) ~= 0
     ideal_total_samples_double = broadband_epoch_size * EEGin.srate;
     nearest_integer_samples = round(ideal_total_samples_double);
@@ -747,6 +751,9 @@ end
 
 % Calculate the ideal epoch size for each band based on the rule
 epoch_sizes_per_wavelet_band = epoch_size_in_cycles ./ lower_frequencies;
+% Ensure at least 2*C samples to avoid rank deficiency and ill-conditioning in high-density arrays
+min_epoch_samples = min(ceil(2.0 * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
+epoch_sizes_per_wavelet_band = max(epoch_sizes_per_wavelet_band, min_epoch_samples / srate);
 
 % --- Display wavelet band-widths and epoch sizes ---
 % disp(' ');
