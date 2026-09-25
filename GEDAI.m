@@ -161,6 +161,7 @@ end
 
 original_channel_threshold = ENOVA_threshold_per_channel;
 silent_mode = false;
+k_channel_multiplier = 1.0; % minimum epoch length = k * channels samples
 num_channels_rejected = 0;
 total_original_channels = size(EEGin.data, 1);
 
@@ -170,6 +171,9 @@ if ~isempty(varargin)
         if isstruct(currentArg)
             if isfield(currentArg, 'silent')
                 silent_mode = currentArg.silent;
+            end
+            if isfield(currentArg, 'k_channel_multiplier')
+                k_channel_multiplier = currentArg.k_channel_multiplier;
             end
             if isfield(currentArg, 'original_channel_threshold')
                 original_channel_threshold = currentArg.original_channel_threshold;
@@ -287,7 +291,7 @@ if ENOVA_threshold_per_channel < inf
 
     % Run GEDAI with channel rejection disabled (inf) to identify bad channels
     % Also disable epoch rejection in pass 1 so channel variance isn't computed on incomplete data
-    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, struct('silent', true));
+    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, struct('silent', true, 'k_channel_multiplier', k_channel_multiplier));
 
     clear EEGclean_p1 EEGartifacts_p1; % Free memory
 
@@ -335,7 +339,7 @@ if ENOVA_threshold_per_channel < inf
         disp([newline '--- PASS 2: Processing reduced data with global epoch thresholds ---']);
         [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = ...
             GEDAI(EEG_reduced, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_reduced, parallelize, false, ENOVA_threshold_per_epoch, inf, signal_type, smoothing_window_seconds, output_reference_channel, ENOVA_per_epoch_p1, ...
-            struct('original_channel_threshold', original_channel_threshold, 'num_channels_rejected', length(channels_to_remove), 'total_original_channels', size(EEGin.data, 1)));
+            struct('original_channel_threshold', original_channel_threshold, 'num_channels_rejected', length(channels_to_remove), 'total_original_channels', size(EEGin.data, 1), 'k_channel_multiplier', k_channel_multiplier));
 
         % --- INTERPOLATION ---
         disp([newline '--- INTERPOLATING BAD CHANNELS ---']);
@@ -660,8 +664,8 @@ end
 
 % -- Ensure epoch size results in an even number of samples (for broadband)
 broadband_epoch_size = 1; % Note: IN SECONDS (this is now only the DEFAULT for broadband)
-% Ensure at least 2*C samples to avoid rank deficiency and ill-conditioning in high-density arrays
-min_bb_samples = min(ceil(2.0 * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
+% Ensure at least k*C samples (k_channel_multiplier) to limit rank deficiency in high-density arrays
+min_bb_samples = min(ceil(k_channel_multiplier * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
 broadband_epoch_size = max(broadband_epoch_size, min_bb_samples / EEGin.srate);
 
 if rem(broadband_epoch_size*EEGin.srate, 2) ~= 0
@@ -766,8 +770,8 @@ end
 
 % Calculate the ideal epoch size for each band based on the rule
 epoch_sizes_per_wavelet_band = epoch_size_in_cycles ./ lower_frequencies;
-% Ensure at least 2*C samples to avoid rank deficiency and ill-conditioning in high-density arrays
-min_epoch_samples = min(ceil(2.0 * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
+% Ensure at least k*C samples (k_channel_multiplier) to limit rank deficiency in high-density arrays
+min_epoch_samples = min(ceil(k_channel_multiplier * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
 epoch_sizes_per_wavelet_band = max(epoch_sizes_per_wavelet_band, min_epoch_samples / srate);
 
 % --- Display wavelet band-widths and epoch sizes ---
