@@ -113,6 +113,13 @@ function [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_
 if nargin < 2 || isempty(artifact_threshold_type)
     artifact_threshold_type = 'auto';
 end
+if isnumeric(artifact_threshold_type)
+    threshold_com_str = num2str(artifact_threshold_type);
+    threshold_label = threshold_com_str;
+else
+    threshold_label = char(artifact_threshold_type);
+    threshold_com_str = ['''' threshold_label ''''];
+end
 if nargin < 3 || isempty(epoch_size_in_cycles)
     epoch_size_in_cycles = 12;  % Note: Number of wave CYCLES per epoch across wavelet bands (default = 12 cycles)
 end
@@ -215,8 +222,9 @@ if isfield(EEGin, 'chanlocs') && ~isempty(EEGin.chanlocs)
         external_ref_label = spec_initial.external_ref_label;
     elseif ~isempty(spec_initial.required_channel_indices)
         EEG_data_2D_check = reshape(EEGin.data, size(EEGin.data, 1), []);
-        channel_diff_std_check = std(diff(EEG_data_2D_check(spec_initial.required_channel_indices, :), 1, 2), 0, 2);
-        flat_sub_idx = find(channel_diff_std_check < 1e-7);
+        channel_diff_std_all = std(diff(EEG_data_2D_check, 1, 2), 0, 2);
+        channel_diff_std_check = channel_diff_std_all(spec_initial.required_channel_indices);
+        flat_sub_idx = find(channel_diff_std_check < GEDAI_flat_tolerance(channel_diff_std_all));
         if ~isempty(flat_sub_idx)
             has_flat_recording_ref = true;
             flat_ref_labels = {EEGin.chanlocs(spec_initial.required_channel_indices(flat_sub_idx)).labels};
@@ -238,9 +246,9 @@ if ENOVA_threshold_per_channel < inf
 
     % --- PRE-PASS: Flat Channel Identification ---
     disp([newline '--- PRE-PASS: Flat Channel Identification ---']);
-    flat_tolerance = 1e-7;
     EEG_data_2D = reshape(EEGin.data, size(EEGin.data, 1), []);
     channel_diff_std = std(diff(EEG_data_2D, 1, 2), 0, 2);
+    flat_tolerance = GEDAI_flat_tolerance(channel_diff_std);
     flat_channels = find(channel_diff_std < flat_tolerance);
 
     % If the selected reference channel is flat because it is the online recording reference,
@@ -288,7 +296,13 @@ if ENOVA_threshold_per_channel < inf
 
     % Full list of channels to remove
     channels_to_remove = union(flat_channels(:), noisy_channels(:));
-    GEDAI_validate_reference_channels(EEGin.chanlocs, reference_mode, channels_to_remove);
+    if ~GEDAI_validate_reference_channels(EEGin.chanlocs, reference_mode, channels_to_remove)
+        reference_mode = 'AvgRef';
+        internal_reference = 'AvgRef';
+        output_reference_channel = 'AvgRef';
+        has_flat_recording_ref = false;
+        is_external_recording_ref = false;
+    end
 
     % Construct the full ENOVA output array (flat channels get Inf)
     ENOVA_per_channel_val = nan(size(EEGin.data, 1), 1);
@@ -395,11 +409,11 @@ if ENOVA_threshold_per_channel < inf
             ref_matrix_type_str = ref_matrix_type;
         end
         if isempty(output_reference_channel)
-            com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
+            com = sprintf('EEG = GEDAI(EEG, %s, %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
+                threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
         else
-            com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-                artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+            com = sprintf('EEG = GEDAI(EEG, %s, %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
+                threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type_str, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
         end
 
         % Optional output re-reference to a user-specified channel label
@@ -453,7 +467,7 @@ if ENOVA_threshold_per_channel < inf
 
             % Plot sliding thresholds if applicable
             if smoothing_window_seconds ~= Inf && isfield(EEGclean.etc.GEDAI, 'artifact_threshold_array_per_band')
-                plot_title = ['GEDAI Sliding Thresholds (' artifact_threshold_type ' | Window: ' num2str(smoothing_window_seconds) ' s | SENSAI: ' num2str(round(SENSAI_score, 1)) '%)'];
+                plot_title = ['GEDAI Sliding Thresholds (' threshold_label ' | Window: ' num2str(smoothing_window_seconds) ' s | SENSAI: ' num2str(round(SENSAI_score, 1)) '%)'];
                 figure('Color', 'w', 'Name', plot_title);
                 num_plots = length(EEGclean.etc.GEDAI.artifact_threshold_array_per_band);
 
@@ -574,9 +588,10 @@ if ~isempty(bands_to_zero)
     % Robust execution order: GPU(Double) -> GPU(Single) -> CPU(Double) -> CPU(Single)
     success = false;
     warn_state_wavelet = warning('off');
+    restore_warnings = onCleanup(@() warning(warn_state_wavelet));
 
     % Attempt GPU Processing
-    if gpuDeviceCount > 0
+    if parallelize && exist('gpuDeviceCount', 'file') && gpuDeviceCount > 0
         try
             disp('Attempting GPU processing (Double Precision)...');
             parallel.gpu.enableCUDAForwardCompatibility(true)
@@ -592,7 +607,7 @@ if ~isempty(bands_to_zero)
             clear data_gpu low_freq_noise_gpu;
             success = true;
         catch
-            warning('GPU (Double) failed. Attempting GPU (Single Precision)...');
+            disp('GPU (Double) failed. Attempting GPU (Single Precision)...');
             try
                 data_gpu = gpuArray(single(EEGavRef.data'));
                 low_freq_noise_gpu = zeros(size(data_gpu), 'like', data_gpu);
@@ -605,7 +620,7 @@ if ~isempty(bands_to_zero)
                 clear data_gpu low_freq_noise_gpu;
                 success = true;
             catch
-                warning('GPU (Single) failed. Falling back to CPU.');
+                disp('GPU (Single) failed. Falling back to CPU.');
             end
         end
     end
@@ -624,7 +639,7 @@ if ~isempty(bands_to_zero)
             EEGavRef.data = EEGavRef.data - low_freq_noise';
             clear data_cpu low_freq_noise;
         catch
-            warning('CPU (Double) failed. Attempting CPU (Single Precision)...');
+            disp('CPU (Double) failed. Attempting CPU (Single Precision)...');
             % Single precision fallback for OOM
             data_cpu = single(EEGavRef.data');
             low_freq_noise = zeros(size(data_cpu), 'like', data_cpu);
@@ -637,7 +652,7 @@ if ~isempty(bands_to_zero)
             clear data_cpu low_freq_noise;
         end
     end
-    warning(warn_state_wavelet);
+    clear restore_warnings;
 end
 
 %% ------------------ GEDAI Broadband------------------------------
@@ -996,11 +1011,11 @@ if ~ischar(ref_matrix_type)
     ref_matrix_type = 'custom';
 end
 if isempty(output_reference_channel)
-    com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
+    com = sprintf('EEG = GEDAI(EEG, %s, %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
+        threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
 else
-    com = sprintf('EEG = GEDAI(EEG, ''%s'', %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
-        artifact_threshold_type, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
+    com = sprintf('EEG = GEDAI(EEG, %s, %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s, ''%s'');', ...
+        threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel);
 end
 
 if visualize_artifacts
@@ -1240,7 +1255,7 @@ if ~silent_mode
 end
 
 if visualize_artifacts && ~silent_mode && smoothing_window_seconds ~= Inf
-    plot_title = ['GEDAI Sliding Thresholds (' artifact_threshold_type ' | Window: ' num2str(smoothing_window_seconds) ' s | SENSAI: ' num2str(round(SENSAI_score, 1)) '%)'];
+    plot_title = ['GEDAI Sliding Thresholds (' threshold_label ' | Window: ' num2str(smoothing_window_seconds) ' s | SENSAI: ' num2str(round(SENSAI_score, 1)) '%)'];
     figure('Color', 'w', 'Name', plot_title);
     num_plots = length(artifact_threshold_array_per_band);
 
@@ -1519,12 +1534,32 @@ EEG.ref=spec.label;
 for chIdx=1:EEG.nbchan, EEG.chanlocs(chIdx).ref=spec.label; end
 end
 
-function GEDAI_validate_reference_channels(chanlocs,mode,channels_to_remove)
+function is_valid = GEDAI_validate_reference_channels(chanlocs,mode,channels_to_remove)
 spec=GEDAI_create_reference_spec(chanlocs,mode);
+is_valid = true;
 if ~isempty(spec.required_channel_indices) && any(ismember(spec.required_channel_indices,channels_to_remove))
     labels={chanlocs(spec.required_channel_indices).labels};
-    error('GEDAI:ReferenceChannelRejected','A required reference channel was marked bad: %s.',strjoin(labels,', '));
+    warning('GEDAI:ReferenceChannelRejected','Reference channel(s) %s marked bad; falling back to average reference.',strjoin(labels,', '));
+    is_valid = false;
 end
+end
+
+function tol = GEDAI_flat_tolerance(channel_diff_std)
+% Relative to typical channel activity so the test is independent of data units (V vs uV).
+typical = median(channel_diff_std(channel_diff_std > 0));
+if isempty(typical) || ~isfinite(typical)
+    tol = 1e-7;
+else
+    tol = 1e-7 * typical;
+end
+end
+
+function L_data = GEDAI_load_template_leadfield()
+persistent cached
+if isempty(cached)
+    cached = load(fullfile(fileparts(which('GEDAI')), 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat'), 'leadfield4GEDAI');
+end
+L_data = cached;
 end
 
 function [refCOV,G_full] = GEDAI_create_refCOV(ref_matrix_type,EEGin,EEGavRef,signal_type,internal_reference)
@@ -1541,7 +1576,7 @@ if isnumeric(ref_matrix_type)
 end
 switch lower(char(ref_matrix_type))
     case 'precomputed'
-        L=load('fsavLEADFIELD_4_GEDAI.mat'); labels={EEGin.chanlocs.labels}; tmpl={L.leadfield4GEDAI.electrodes.Name}; idx=zeros(1,length(labels));
+        L=GEDAI_load_template_leadfield(); labels={EEGin.chanlocs.labels}; tmpl={L.leadfield4GEDAI.electrodes.Name}; idx=zeros(1,length(labels));
         for i=1:length(labels)
             [found,j]=ismember(lower(labels{i}),lower(tmpl));
             if found, idx(i)=j; else
@@ -1567,7 +1602,7 @@ switch lower(char(ref_matrix_type))
     case 'interpolated'
         n=length(EEGavRef.chanlocs);
         if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
-        L=load('fsavLEADFIELD_4_GEDAI.mat'); lf=L.leadfield4GEDAI.EEG;
+        L=GEDAI_load_template_leadfield(); lf=L.leadfield4GEDAI.EEG;
         if strcmpi(internal_reference, 'AvgRef')
             lf.data = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
             tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
@@ -1618,13 +1653,9 @@ end
 
 leadfield_electrodes = [];
 try
-    p_aux = fileparts(which('GEDAI'));
-    L_path = fullfile(p_aux, 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat');
-    if exist(L_path, 'file')
-        L_data = load(L_path, 'leadfield4GEDAI');
-        if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
-            leadfield_electrodes = L_data.leadfield4GEDAI.electrodes;
-        end
+    L_data = GEDAI_load_template_leadfield();
+    if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
+        leadfield_electrodes = L_data.leadfield4GEDAI.electrodes;
     end
 catch
     % ignore if leadfield file cannot be loaded
@@ -1711,23 +1742,24 @@ warning('GEDAI:ExternalRecordingReferenceUsed', '%s', msg);
 end
 
 function [is_std, matched_name] = GEDAI_is_standard_template_channel(channel_label)
+persistent elc_locs
 is_std = false; matched_name = '';
 p_aux = fileparts(which('GEDAI'));
-L_path = fullfile(p_aux, 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat');
-if exist(L_path, 'file')
-    L_data = load(L_path, 'leadfield4GEDAI');
-    if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
-        tmpl = {L_data.leadfield4GEDAI.electrodes.Name};
-        f = find(strcmpi(strtrim(channel_label), tmpl), 1);
-        if ~isempty(f)
-            is_std = true; matched_name = tmpl{f}; return;
-        end
+L_data = GEDAI_load_template_leadfield();
+if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
+    tmpl = {L_data.leadfield4GEDAI.electrodes.Name};
+    f = find(strcmpi(strtrim(channel_label), tmpl), 1);
+    if ~isempty(f)
+        is_std = true; matched_name = tmpl{f}; return;
     end
 end
 elc_path = fullfile(p_aux, 'auxiliaries', 'standard_1005.elc');
 if exist(elc_path, 'file')
     try
-        locs = readlocs(elc_path, 'filetype', 'elc');
+        if isempty(elc_locs)
+            elc_locs = readlocs(elc_path, 'filetype', 'elc');
+        end
+        locs = elc_locs;
         f = find(strcmpi(strtrim(channel_label), {locs.labels}), 1);
         if ~isempty(f)
             is_std = true; matched_name = locs(f).labels; return;
@@ -1739,27 +1771,23 @@ end
 
 function [is_std, G_std] = GEDAI_lookup_template_leadfield(channel_label)
 is_std = false; G_std = [];
-p_aux = fileparts(which('GEDAI'));
-L_path = fullfile(p_aux, 'auxiliaries', 'fsavLEADFIELD_4_GEDAI.mat');
-if exist(L_path, 'file')
-    L_data = load(L_path, 'leadfield4GEDAI');
-    if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
-        tmpl = {L_data.leadfield4GEDAI.electrodes.Name};
-        Gain = L_data.leadfield4GEDAI.Gain;
-        if strcmpi(channel_label, 'M1M2')
-            i1 = find(strcmpi(tmpl, 'M1'), 1); i2 = find(strcmpi(tmpl, 'M2'), 1);
-            if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
-        elseif strcmpi(channel_label, 'TP9TP10')
-            i1 = find(strcmpi(tmpl, 'TP9'), 1); i2 = find(strcmpi(tmpl, 'TP10'), 1);
-            if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
-        elseif strcmpi(channel_label, 'A1A2')
-            i1 = find(strcmpi(tmpl, 'A1'), 1); i2 = find(strcmpi(tmpl, 'A2'), 1);
-            if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
-        else
-            f = find(strcmpi(strtrim(channel_label), tmpl), 1);
-            if ~isempty(f)
-                is_std = true; G_std = Gain(f, :); return;
-            end
+L_data = GEDAI_load_template_leadfield();
+if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electrodes')
+    tmpl = {L_data.leadfield4GEDAI.electrodes.Name};
+    Gain = L_data.leadfield4GEDAI.Gain;
+    if strcmpi(channel_label, 'M1M2')
+        i1 = find(strcmpi(tmpl, 'M1'), 1); i2 = find(strcmpi(tmpl, 'M2'), 1);
+        if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
+    elseif strcmpi(channel_label, 'TP9TP10')
+        i1 = find(strcmpi(tmpl, 'TP9'), 1); i2 = find(strcmpi(tmpl, 'TP10'), 1);
+        if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
+    elseif strcmpi(channel_label, 'A1A2')
+        i1 = find(strcmpi(tmpl, 'A1'), 1); i2 = find(strcmpi(tmpl, 'A2'), 1);
+        if ~isempty(i1) && ~isempty(i2), is_std = true; G_std = 0.5*(Gain(i1,:)+Gain(i2,:)); return; end
+    else
+        f = find(strcmpi(strtrim(channel_label), tmpl), 1);
+        if ~isempty(f)
+            is_std = true; G_std = Gain(f, :); return;
         end
     end
 end
