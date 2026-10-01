@@ -82,14 +82,21 @@ half_epoch = epoch_samples/2;
 for i = 1:num_epochs
     component_spatial_filter = Evec(:,:,i);
     
-    % --- OPTIMIZATION START ---
-    % 1. Create a logical mask of indices to zero out
-    % (We zero out the SIGNAL components to reconstruct the NOISE to subtract)
-    signal_indices = abs(diag(Eval(:,:,i))) < exp(Treshold1_array(i) - 100);
+    % 1. Extract SENSAI's dynamically learned threshold for this epoch
+    tau = exp(Treshold1_array(i) - 100);
     
-    % 2. Apply the mask (Vectorized)
-    component_spatial_filter(:, signal_indices) = 0;
-    % --- OPTIMIZATION END ---
+    % 2. Calculate continuous eigenvalue ratio
+    evals = abs(diag(Eval(:,:,i)));
+    ratio = evals ./ max(tau, 1e-12);
+    
+    % 3. Evaluate the cubic sigmoidal taper (gamma = 3)
+    %    - If ratio << 1 (clean EEG): w_noise -> 0.0
+    %    - If ratio == 1 (at SENSAI threshold): w_noise = 0.50
+    %    - If ratio >> 1 (severe artifact): w_noise -> 1.0
+    w_noise = 1.0 ./ (1.0 + (1.0 ./ max(ratio, 1e-6)).^3);
+    
+    % 4. Modulate spatial filter via continuous diagonal shrinkage
+    component_spatial_filter = Evec(:,:,i) * diag(w_noise);
 
     artifacts_timecourses = component_spatial_filter' * EEGdata_epoched(:,:,i);    
     Signal_to_remove = refCOV_reg * (Evec(:,:,i) * artifacts_timecourses);
