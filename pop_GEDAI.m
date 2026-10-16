@@ -29,20 +29,23 @@ channel_labels = {EEG.chanlocs.labels};
 channel_labels_sanitized = strrep(channel_labels, '|', '/');
 channel_labels_lower = lower(channel_labels);
 
-output_ref_display_options = {'                  AvgRef', '                  REST'};
+% Calibrated center-padding for popupmenu controls in Windows MATLAB
+pad_center = @(s) [repmat(' ', 1, max(0, round(36 - length(strtrim(s))*1.1))), strtrim(s)];
+
+output_ref_display_options = {pad_center('AvgRef'), pad_center('REST')};
 output_ref_value_options = {'AvgRef', 'REST'};
 
 % Add pairwise average options only when both channels are present.
 if any(strcmp(channel_labels_lower, 'm1')) && any(strcmp(channel_labels_lower, 'm2'))
-    output_ref_display_options{end+1} = 'M1+M2 (avg)';
+    output_ref_display_options{end+1} = pad_center('M1+M2 (avg)');
     output_ref_value_options{end+1} = '__GEDAI_REF_M1M2_AVG__';
 end
 if any(strcmp(channel_labels_lower, 'a1')) && any(strcmp(channel_labels_lower, 'a2'))
-    output_ref_display_options{end+1} = 'A1+A2 (avg)';
+    output_ref_display_options{end+1} = pad_center('A1+A2 (avg)');
     output_ref_value_options{end+1} = '__GEDAI_REF_A1A2_AVG__';
 end
 if any(strcmp(channel_labels_lower, 'tp9')) && any(strcmp(channel_labels_lower, 'tp10'))
-    output_ref_display_options{end+1} = 'TP9+TP10 (avg)';
+    output_ref_display_options{end+1} = pad_center('TP9+TP10 (avg)');
     output_ref_value_options{end+1} = '__GEDAI_REF_TP9TP10_AVG__';
 end
 
@@ -51,7 +54,7 @@ if isfield(EEG, 'ref') && (ischar(EEG.ref) || (isstring(EEG.ref) && isscalar(EEG
     rec_ref_str = strtrim(char(EEG.ref));
     if ~isempty(rec_ref_str) && ~ismember(lower(rec_ref_str), {'average', 'avgref', 'common', 'rest', 'none', 'raw'})
         if ~any(strcmpi(channel_labels, rec_ref_str))
-            output_ref_display_options{end+1} = [rec_ref_str ' (recording ref - leadfield only)'];
+            output_ref_display_options{end+1} = pad_center([rec_ref_str ' (recording ref - leadfield only)']);
             output_ref_value_options{end+1} = rec_ref_str;
         end
     end
@@ -59,7 +62,7 @@ end
 
 % Add all individual channels.
 for chIdx = 1:numel(channel_labels_sanitized)
-    output_ref_display_options{end+1} = channel_labels_sanitized{chIdx};
+    output_ref_display_options{end+1} = pad_center(channel_labels_sanitized{chIdx});
     output_ref_value_options{end+1} = channel_labels{chIdx};
 end
 
@@ -73,20 +76,23 @@ addParameter(p, 'visualization_A', false); % Add output visual parameter
 p.parse(varargin{:}); % Parse the input arguments
 
 % Create GUI for parameter input (compact 10-row layout)
+str_strength = [pad_center('auto') '|' pad_center('auto+') '|' pad_center('auto-')];
+str_leadfield = [pad_center('precomputed') '|' pad_center('interpolated') '|' pad_center('warped')];
+
 uilist = { ...    
-    {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' '                    auto|                    auto+|                    auto-' 'horizontalalignment' 'center'} ...
-    {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' '          precomputed|          interpolated|          warped' 'horizontalalignment' 'center'} ...
+    {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' str_strength 'horizontalalignment' 'center'} ...
+    {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' str_leadfield 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Sliding window (seconds, Inf=all)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds' 'horizontalalignment' 'center'} ...
-    {'style' 'checkbox' 'string' ' Reject bad channels (threshold):' 'tag' 'reject_channels_by_enova' 'value' 0} {'style' 'edit' 'string' num2str(ENOVA_threshold_per_channel) 'tag' 'ENOVA_threshold_per_channel' 'horizontalalignment' 'center'} ...
-    {'style' 'checkbox' 'string' ' Reject bad epochs (threshold):' 'tag' 'reject_epochs_by_enova' 'value' 0} {'style' 'edit' 'string' num2str(ENOVA_threshold_per_epoch) 'tag' 'ENOVA_threshold_per_epoch' 'horizontalalignment' 'center'} ...
+    {'style' 'checkbox' 'string' ' Reject bad channels (ENOVA threshold):' 'tag' 'reject_channels_by_enova' 'value' 0} {'style' 'edit' 'string' num2str(ENOVA_threshold_per_channel) 'tag' 'ENOVA_threshold_per_channel' 'horizontalalignment' 'center'} ...
+    {'style' 'checkbox' 'string' ' Reject bad epochs (ENOVA threshold):' 'tag' 'reject_epochs_by_enova' 'value' 0} {'style' 'edit' 'string' num2str(ENOVA_threshold_per_epoch) 'tag' 'ENOVA_threshold_per_epoch' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Output reference'} {'style' 'popupmenu' 'string' ref_channel_popup_options 'tag' 'output_reference_popup' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Recording reference channel (e.g. FCz; overrides above)'} {'style' 'edit' 'string' '' 'tag' 'custom_reference_channel' 'horizontalalignment' 'center'} ...
-    {'style' 'text' 'string' 'Parallel processing ( > RAM):'} {'style' 'checkbox' 'string' '' 'tag' 'parallel_processing' 'Value' 1} ...
-    {'style' 'text' 'string' 'Artifact visualization:'} {'style' 'checkbox' 'string' '' 'tag' 'visualization_A' 'Value' 1} ...
+    {'style' 'checkbox' 'string' ' Parallel processing ( > RAM)' 'tag' 'parallel_processing' 'Value' 1} ...
+    {'style' 'checkbox' 'string' ' Artifact visualization' 'tag' 'visualization_A' 'Value' 1} ...
 };
-geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 0.25, 1.4, 0.25] };
+geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1] };
 title = '  GEDAI denoising toolbox |  v1.8  ';
 
 % Get user input

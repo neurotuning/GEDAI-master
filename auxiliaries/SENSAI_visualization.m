@@ -122,9 +122,9 @@ col_bef  = [0.30 0.45 0.75];
 col_star = [1.00 0.88 0.00];
 
 % --- Panel 1: Before GEDAI ---
-figure(fig);
-ax1 = subplot(1, 3, 1);
-set(ax1, 'Position', [0.045, 0.12, 0.22, 0.63], 'FontSize', 11.5); 
+set(groot, 'CurrentFigure', fig);
+ax1 = subplot(1, 3, 1, 'Parent', fig);
+set(ax1, 'Position', [0.045, 0.12, 0.22, 0.60], 'FontSize', 13); 
 hold(ax1, 'on');
 
 [~, si] = sort(ssi_before, 'ascend');
@@ -133,22 +133,23 @@ scatter(ax1, lpow_before(si), ssi_before(si), 38, ssi_before(si), ...
 
 yline(ax1, 1, '--', 'Color', col_star, 'LineWidth', 1.5, 'Alpha', 0.6);
 colormap(ax1, parula);
-cb = colorbar(ax1, 'Position', [0.272, 0.12, 0.010, 0.63]);
+cb = colorbar(ax1, 'Position', [0.272, 0.12, 0.010, 0.60]);
 cb.Label.String = 'SSI (Subspace Similarity Index) relative to Leadfield';
-cb.Label.FontSize = 12.5; cb.FontSize = 10.5;
+cb.Label.FontSize = 14; cb.FontSize = 12;
+cb.Ticks = [];
 ax1.CLim = [0 1];
 
-xlabel(ax1, 'Epoch Power (dB)', 'FontSize', 13, 'FontWeight', 'bold');
-ylabel(ax1, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 13, 'FontWeight', 'bold');
+xlabel(ax1, 'Epoch Power (dB)', 'FontSize', 14.5, 'FontWeight', 'bold');
+ylabel(ax1, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 14.5, 'FontWeight', 'bold');
 ylim(ax1, [-0.05 1.15]);
 set(ax1, 'YTickMode', 'auto', 'YTickLabelMode', 'auto', 'TickDir', 'both');
 grid(ax1, 'off');
 
 
 % --- Panel 2: After GEDAI ---
-figure(fig);
-ax2 = subplot(1, 3, 2);
-set(ax2, 'Position', [0.355, 0.12, 0.22, 0.63], 'FontSize', 11.5); 
+set(groot, 'CurrentFigure', fig);
+ax2 = subplot(1, 3, 2, 'Parent', fig);
+set(ax2, 'Position', [0.355, 0.12, 0.22, 0.60], 'FontSize', 13); 
 hold(ax2, 'on');
 
 h_noise = scatter(ax2, lpow_artifacts, ssi_artifacts, 38, col_noise, ...
@@ -160,7 +161,7 @@ yline(ax2, 1, '--', 'Color', col_star, 'LineWidth', 1.5, 'Alpha', 0.6);
 h_star = scatter(ax2, ideal_power_target, 1, 250, col_star, 'p', 'filled', 'MarkerEdgeColor', 'k');
 
 ylim(ax2, [-0.05 1.15]);
-ylabel(ax2, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 13, 'FontWeight', 'bold');
+% Redundant y-axis label removed on Panel 2 as requested
 set(ax2, 'YTickMode', 'auto', 'YTickLabelMode', 'auto', 'TickDir', 'both');
 grid(ax2, 'off');
 
@@ -182,7 +183,7 @@ else
     end
 end
 xlim(ax1, x_lims); xlim(ax2, x_lims);
-text(ax1, mean(x_lims), 1.10, 'Leadfield Subspace', 'FontSize', 10, 'Color', 0.5*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+text(ax1, mean(x_lims), 1.10, 'Leadfield Subspace', 'FontSize', 12.5, 'Color', 0.5*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
 
 % ── 5.1 LDA Shading ──
 if ~isempty(lda_full)
@@ -203,14 +204,14 @@ if ~isempty(lda_full)
     colormap(ax2, bg_cmap); ax2.CLim = [0 1];
     uistack(h_cont, 'bottom');
 end
-text(ax2, ideal_power_target, 1.10, 'Leadfield Subspace', 'FontSize', 10, 'Color', 0.5*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+text(ax2, ideal_power_target, 1.10, 'Leadfield Subspace', 'FontSize', 12.5, 'Color', 0.5*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
 
-xlabel(ax2, 'Epoch Power (dB)', 'FontSize', 13, 'FontWeight', 'bold');
+xlabel(ax2, 'Epoch Power (dB)', 'FontSize', 14.5, 'FontWeight', 'bold');
 legend(ax2, [h_star, h_sig, h_noise], {'Leadfield Subspace', sprintf('Signal (mean SSI=%.2f)', mean(ssi_after)), sprintf('Noise (mean SSI=%.2f)', mean(ssi_artifacts))}, ...
-       'Position', [0.585, 0.77, 0.085, 0.08], 'FontSize', 8.5);
+       'Position', [0.585, 0.77, 0.085, 0.08], 'FontSize', 11);
 
 try
-    sgtitle(plot_title, 'FontSize', 13, 'FontWeight', 'bold');
+    sgtitle(fig, plot_title, 'FontSize', 16, 'FontWeight', 'bold');
 catch
     try
         suptitle(plot_title);
@@ -220,21 +221,19 @@ end
 
 % ── 6. Add Marginal Density Distributions ─────────────────────────────────
 % Panel 1 Marginals (Empty data, just for layout/title alignment)
-ttl1 = sprintf('Before Denoising  |  Mean SSI: %.2f', mean(ssi_before));
+ttl1 = sprintf('Before Denoising\nMean SSI: %.2f', mean(ssi_before));
 add_marginal_densities(ax1, {}, {}, {}, SSI_top_PCs, ttl1);
 
 % Panel 2 Marginals
 if ~isnan(sil_signal)
-    ttl2 = sprintf('After Denoising  |  Mean SSSI: %.2f   |   Mean NSSI: %.2f\nSSI Silhouette Score: %.2f', ...
-                  mean(ssi_after), mean(ssi_artifacts), sil_signal);
+    ttl2 = sprintf('After Denoising\nSSI Silhouette Score: %.2f', sil_signal);
 else
-    ttl2 = sprintf('After Denoising\nMean SSSI: %.2f   |   Mean NSSI: %.2f', ...
-                  mean(ssi_after), mean(ssi_artifacts));
+    ttl2 = 'After Denoising';
 end
 add_marginal_densities(ax2, {lpow_after, lpow_artifacts}, {ssi_after, ssi_artifacts}, {col_sig, col_noise}, SSI_top_PCs, ttl2);
 
 % --- Far-Right Panels: Dual Topoplots (Denoised Power [Upper] & ENOVA [Lower]) ---
-figure(fig);
+set(groot, 'CurrentFigure', fig);
 
 % 1. Compute Denoised Channel Power
 pow_clean_raw = var(double(EEGclean.data), 0, 2);
@@ -316,7 +315,7 @@ end
 has_coords = (num_valid_coords >= 3);
 
 % --- Upper Panel: Average PSD Across Electrodes (0.5 Hz Resolution) Before vs After ---
-ax_psd = axes('Position', [0.690, 0.510, 0.250, 0.210]);
+ax_psd = axes('Parent', fig, 'Position', [0.690, 0.510, 0.250, 0.210]);
 hold(ax_psd, 'on');
 
 % Compute PSD at exact 0.5 Hz resolution (2-second window)
@@ -368,32 +367,32 @@ h_psd_a = plot(ax_psd, f_disp, pa_disp, '-', 'Color', [0.08 0.68 0.25], 'LineWid
 h_psd_n = plot(ax_psd, f_disp, pn_disp, '-', 'Color', [0.85 0.18 0.18], 'LineWidth', 1.8);
 
 xlim(ax_psd, [0.5, max_f_disp]);
-xlabel(ax_psd, 'Frequency (Hz)', 'FontSize', 12.5, 'FontWeight', 'bold');
-ylabel(ax_psd, 'PSD (dB)', 'FontSize', 12.5, 'FontWeight', 'bold');
-title(ax_psd, 'ENOVA-weighted PSD over channels', 'FontSize', 12.5, 'FontWeight', 'bold');
+xlabel(ax_psd, 'Frequency (Hz)', 'FontSize', 14, 'FontWeight', 'bold');
+ylabel(ax_psd, 'PSD (dB)', 'FontSize', 14, 'FontWeight', 'bold');
+title(ax_psd, 'ENOVA-weighted PSD over channels', 'FontSize', 14.5, 'FontWeight', 'bold');
 grid(ax_psd, 'on');
 box(ax_psd, 'off');
-set(ax_psd, 'Color', 'w', 'FontSize', 11.5);
-legend(ax_psd, [h_psd_b, h_psd_a, h_psd_n], {'Original', 'Signal', 'Noise'}, 'Location', 'northeast', 'FontSize', 9.5, 'Box', 'off');
+set(ax_psd, 'Color', 'w', 'FontSize', 13);
+legend(ax_psd, [h_psd_b, h_psd_a, h_psd_n], {'Original', 'Signal', 'Noise'}, 'Location', 'northeast', 'FontSize', 11.5, 'Box', 'off');
 
 % --- Lower Topoplot: Post-Denoising ENOVA per Channel ---
-ax_topo_enova = axes('Position', [0.720, 0.120, 0.14, 0.22]);
+ax_topo_enova = axes('Parent', fig, 'Position', [0.720, 0.120, 0.14, 0.22]);
 mean_enova_disp = mean(enova_plot_val, 'omitnan');
 
 plot_done = false;
 if has_coords && exist('topoplot', 'file')
-    axes(ax_topo_enova);
+    set(fig, 'CurrentAxes', ax_topo_enova);
     try
         topoplot(enova_plot_val, chanlocs, 'style', 'both', 'electrodes', 'on', ...
                  'shading', 'flat', 'gridscale', 120, 'conv', 'off', 'headrad', 'rim', 'whitebk', 'on');
         colormap(ax_topo_enova, 'turbo');
         cb_enova = colorbar(ax_topo_enova, 'Position', [0.875, 0.135, 0.009, 0.19]);
         cb_enova.Label.String = 'ENOVA (%)';
-        cb_enova.Label.FontSize = 11.5; cb_enova.FontSize = 10.5;
+        cb_enova.Label.FontSize = 13.5; cb_enova.FontSize = 12;
         cb_enova.Label.FontWeight = 'bold';
         caxis(ax_topo_enova, [0, 100]);
         title(ax_topo_enova, 'ENOVA (Explained Noise Variance)', ...
-              'FontSize', 12, 'FontWeight', 'bold');
+              'FontSize', 14, 'FontWeight', 'bold');
         plot_done = true;
     catch ME_topo
         warning('SENSAI:topoplotFallback', 'Topoplot failed (%s). Falling back to bar plot.', ME_topo.message);
@@ -401,16 +400,16 @@ if has_coords && exist('topoplot', 'file')
     end
 end
 if ~plot_done
-    axes(ax_topo_enova);
+    set(fig, 'CurrentAxes', ax_topo_enova);
     bar(ax_topo_enova, 1:length(enova_plot_val), enova_plot_val, 'FaceColor', [0.85 0.35 0.25], 'EdgeColor', 'none');
     ax_topo_enova.XTick = 1:length(enova_plot_val);
     if isfield(chanlocs, 'labels')
         ax_topo_enova.XTickLabel = {chanlocs.labels};
         ax_topo_enova.XTickLabelRotation = 45;
     end
-    ylabel(ax_topo_enova, 'ENOVA (%)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel(ax_topo_enova, 'ENOVA (%)', 'FontSize', 14, 'FontWeight', 'bold');
     title(ax_topo_enova, 'ENOVA (Explained Noise Variance)', ...
-          'FontSize', 12, 'FontWeight', 'bold');
+          'FontSize', 14, 'FontWeight', 'bold');
     grid(ax_topo_enova, 'on'); box(ax_topo_enova, 'off');
 end
 
@@ -433,6 +432,18 @@ metrics = struct('ssi_before_mean', mean(ssi_before), ...
                  'psd_noise_db', psd_n_db, ...
                  'psd_freqs', f_psd, ...
                  'enova_weights', w_ch);
+
+% --- Enforce title fonts after topoplot to prevent EEGLAB font scaling override ---
+all_ax = findobj(fig, 'Type', 'axes');
+for k = 1:length(all_ax)
+    t_obj = all_ax(k).Title;
+    if ~isempty(t_obj.String)
+        t_str = string(t_obj.String);
+        if any(contains(t_str, ["Before Denoising", "After Denoising"]))
+            set(t_obj, 'FontSize', 13, 'FontWeight', 'bold');
+        end
+    end
+end
 
 % --- Instant Reveal ---
 set(fig, 'Color', 'w', 'InvertHardcopy', 'off');
@@ -488,12 +499,13 @@ function add_marginal_densities(ax, x_data, y_data, cols, SSI_top_PCs, ttl)
     
     % Strict manual sizing for 3-panel layout
     new_w = 0.22; 
-    new_h = 0.63;
+    new_h = 0.60;
     
+    fig_parent = ancestor(ax, 'figure');
     set(ax, 'Position', [pos(1), pos(2), new_w, new_h]);
-    ax_x = axes('Position', [pos(1), pos(2) + new_h + margin, new_w, 0.085], 'Units', 'normalized', 'Color', 'none', 'XLim', ax.XLim, 'XTick', [], 'YTick', [], 'XAxisLocation', 'bottom', 'Box', 'off');
-    hold(ax_x, 'on'); title(ax_x, ttl, 'FontSize', 11);
-    ax_y = axes('Position', [pos(1) + new_w + margin, pos(2), 0.025, new_h], 'Units', 'normalized', 'Color', 'none', 'YLim', ax.YLim, 'YTick', [], 'XTick', [], 'YAxisLocation', 'left', 'Box', 'off');
+    ax_x = axes('Parent', fig_parent, 'Position', [pos(1), pos(2) + new_h + margin, new_w, 0.080], 'Units', 'normalized', 'Color', 'none', 'XLim', ax.XLim, 'XTick', [], 'YTick', [], 'XAxisLocation', 'bottom', 'Box', 'off');
+    hold(ax_x, 'on'); title(ax_x, ttl, 'FontSize', 20, 'FontWeight', 'bold');
+    ax_y = axes('Parent', fig_parent, 'Position', [pos(1) + new_w + margin, pos(2), 0.025, new_h], 'Units', 'normalized', 'Color', 'none', 'YLim', ax.YLim, 'YTick', [], 'XTick', [], 'YAxisLocation', 'left', 'Box', 'off');
     hold(ax_y, 'on');
     for i = 1:length(x_data)
         try [f, xi] = ksdensity(x_data{i}); fill(ax_x, xi, f, cols{i}, 'FaceAlpha', 0.2, 'EdgeColor', cols{i}, 'LineWidth', 1); catch, end
