@@ -1,4 +1,3 @@
-
 % [Generalized Eigenvalue De-Artifacting Instrument (GEDAI) v 1.8]
 % PolyForm Noncommercial License 1.0.0
 % https://polyformproject.org/licenses/noncommercial/1.0.0
@@ -8,20 +7,26 @@
 %             Center for Biomedical Imaging
 %             University of Geneva
 %             Switzerland
-%
-%
-% For any questions, please contact:
-% dr.t.ros@gmail.com
 
-function vers=eegplugin_GEDAI(fig, try_strings, catch_strings)
-% version
-vers = 'GEDAI v1.8';
+function vers = eegplugin_GEDAI(fig, try_strings, catch_strings)
+    vers = 'GEDAI v1.8';
 
-g = fileparts(which('eegplugin_GEDAI'));
-addpath(fullfile(g, 'auxiliaries'));
+    g = fileparts(which('eegplugin_GEDAI'));
+    addpath(g);
+    addpath(fullfile(g, 'auxiliaries'));
 
-    % Add menu item to EEGLAB interface
-    menu_item = uimenu(fig, 'label', 'GEDAI', 'callback', 'EEG = pop_GEDAI(EEG);eeglab redraw');
+    if nargin < 2 || isempty(try_strings)
+        cb_str = 'EEG = pop_GEDAI(EEG); eeglab redraw;';
+    else
+        cb_str = [try_strings.no_check '[EEG, LASTCOM] = pop_GEDAI(EEG);' catch_strings.new_and_hist];
+    end
 
+    % 1. Add under standard EEGLAB Tools menu
+    toolsmenu = findobj(fig, 'tag', 'tools');
+    if ~isempty(toolsmenu)
+        uimenu(toolsmenu, 'label', 'GEDAI Denoising', 'separator', 'on', 'callback', cb_str);
+    end
 
+    % 2. Also add as top-level menu bar item
+    uimenu(fig, 'label', 'GEDAI', 'callback', cb_str);
 end

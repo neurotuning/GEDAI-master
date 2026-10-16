@@ -454,7 +454,7 @@ if ENOVA_threshold_per_channel < inf
             if ~isempty(refCOV_full)
                 vis_pcs = 3;
                 sensai_epoch_size = 1;
-                visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
+                visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
                 EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
             end
 
@@ -1334,7 +1334,7 @@ end
 % Uses 50% overlapping 1-second epochs for denser coverage in the scatter plot
 if visualize_artifacts && ~isempty(refCOV)
     vis_pcs = 3;
-    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency);
+    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
 
     % Store metrics in EEG.etc.GEDAI
     EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
@@ -1690,15 +1690,32 @@ for idx = 1:length(chanlocs)
         end
     end
 
+    % If both XYZ and polar already exist, do NOT corrupt them!
+    if has_xyz && has_polar
+        if ~isfield(chanlocs(idx), 'sph_theta') || isempty(chanlocs(idx).sph_theta) || isnan(chanlocs(idx).sph_theta)
+            chanlocs(idx).sph_theta = -chanlocs(idx).theta;
+        end
+        if ~isfield(chanlocs(idx), 'sph_phi') || isempty(chanlocs(idx).sph_phi) || isnan(chanlocs(idx).sph_phi)
+            chanlocs(idx).sph_phi = 90 - (chanlocs(idx).radius * 180);
+        end
+        if ~isfield(chanlocs(idx), 'sph_radius') || isempty(chanlocs(idx).sph_radius) || isnan(chanlocs(idx).sph_radius)
+            chanlocs(idx).sph_radius = sqrt(chanlocs(idx).X^2 + chanlocs(idx).Y^2 + chanlocs(idx).Z^2);
+        end
+        continue;
+    end
+
     if has_xyz
         x = chanlocs(idx).X; y = chanlocs(idx).Y; z = chanlocs(idx).Z;
         r_3d = sqrt(x^2 + y^2 + z^2);
-        r_xy = sqrt(x^2 + y^2);
         if r_3d > 0
-            chanlocs(idx).theta = -atan2d(x, y);
-            chanlocs(idx).radius = (r_xy / r_3d) * 0.5;
-            chanlocs(idx).sph_theta = atan2d(y, x);
-            chanlocs(idx).sph_phi = asind(min(max(z / r_3d, -1), 1));
+            % EEGLAB convention: +X is anterior (nose), +Y is left ear
+            % Topoplot polar: theta = -atan2d(y, x), radius = (90 - sph_phi) / 180
+            sph_th = atan2d(y, x);
+            sph_ph = asind(min(max(z / r_3d, -1), 1));
+            chanlocs(idx).theta = -sph_th;
+            chanlocs(idx).radius = (90 - sph_ph) / 180;
+            chanlocs(idx).sph_theta = sph_th;
+            chanlocs(idx).sph_phi = sph_ph;
             chanlocs(idx).sph_radius = r_3d;
         else
             chanlocs(idx).theta = 0;
@@ -1710,15 +1727,16 @@ for idx = 1:length(chanlocs)
     elseif has_polar
         th_deg = chanlocs(idx).theta;
         rad_val = chanlocs(idx).radius;
-        angle_rad = th_deg * pi / 180;
-        r_norm = min(max(rad_val / 0.5, 0), 1);
-        phi = (1 - r_norm) * (pi / 2);
-        chanlocs(idx).X = 85 * cos(phi) * sin(-angle_rad);
-        chanlocs(idx).Y = 85 * cos(phi) * cos(angle_rad);
-        chanlocs(idx).Z = 85 * sin(phi);
-        chanlocs(idx).sph_theta = atan2d(chanlocs(idx).Y, chanlocs(idx).X);
-        chanlocs(idx).sph_phi = asind(min(max(chanlocs(idx).Z / 85, -1), 1));
-        chanlocs(idx).sph_radius = 85;
+        sph_th = -th_deg;
+        sph_ph = 90 - (rad_val * 180);
+        r_3d = 85;
+        [x, y, z] = sph2cart(sph_th * pi / 180, sph_ph * pi / 180, r_3d);
+        chanlocs(idx).X = x;
+        chanlocs(idx).Y = y;
+        chanlocs(idx).Z = z;
+        chanlocs(idx).sph_theta = sph_th;
+        chanlocs(idx).sph_phi = sph_ph;
+        chanlocs(idx).sph_radius = r_3d;
     else
         chanlocs(idx).X = 0;
         chanlocs(idx).Y = 0;

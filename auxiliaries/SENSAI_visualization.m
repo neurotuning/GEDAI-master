@@ -1,4 +1,4 @@
-function metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, ref_cov, epoch_duration_sec, signal_type, SSI_top_PCs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency)
+function metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, ref_cov, epoch_duration_sec, signal_type, SSI_top_PCs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel)
 % SENSAI_VISUALIZATION  2D SENSAI scatter: subspace similarity vs epoch power
 %
 % Inputs:
@@ -114,7 +114,7 @@ else
     plot_title = 'SENSAI visualization:  Subspace Similarity  vs  Epoch Power';
 end
 
-fig = figure('Name', plot_title, 'Color', 'w', 'Position', [80 100 1350 580], 'Visible', 'off');
+fig = figure('Name', plot_title, 'Color', 'w', 'Position', [40 80 1700 580], 'Visible', 'off');
 
 col_sig  = [0.08 0.72 0.22];
 col_noise= [0.85 0.13 0.13];
@@ -123,8 +123,8 @@ col_star = [1.00 0.88 0.00];
 
 % --- Panel 1: Before GEDAI ---
 figure(fig);
-ax1 = subplot(1, 2, 1);
-set(ax1, 'Position', [0.06, 0.12, 0.35, 0.74]); 
+ax1 = subplot(1, 3, 1);
+set(ax1, 'Position', [0.045, 0.12, 0.22, 0.63], 'FontSize', 11.5); 
 hold(ax1, 'on');
 
 [~, si] = sort(ssi_before, 'ascend');
@@ -133,13 +133,13 @@ scatter(ax1, lpow_before(si), ssi_before(si), 38, ssi_before(si), ...
 
 yline(ax1, 1, '--', 'Color', col_star, 'LineWidth', 1.5, 'Alpha', 0.6);
 colormap(ax1, parula);
-cb = colorbar(ax1, 'eastoutside');
+cb = colorbar(ax1, 'Position', [0.272, 0.12, 0.010, 0.63]);
 cb.Label.String = 'SSI (Subspace Similarity Index) relative to Leadfield';
-cb.Label.FontSize = 12;
+cb.Label.FontSize = 12.5; cb.FontSize = 10.5;
 ax1.CLim = [0 1];
 
-xlabel(ax1, 'Epoch Power (dB)', 'FontSize', 11);
-ylabel(ax1, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 11);
+xlabel(ax1, 'Epoch Power (dB)', 'FontSize', 13, 'FontWeight', 'bold');
+ylabel(ax1, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 13, 'FontWeight', 'bold');
 ylim(ax1, [-0.05 1.15]);
 set(ax1, 'YTickMode', 'auto', 'YTickLabelMode', 'auto', 'TickDir', 'both');
 grid(ax1, 'off');
@@ -147,8 +147,8 @@ grid(ax1, 'off');
 
 % --- Panel 2: After GEDAI ---
 figure(fig);
-ax2 = subplot(1, 2, 2);
-set(ax2, 'Position', [0.55, 0.12, 0.35, 0.74]); 
+ax2 = subplot(1, 3, 2);
+set(ax2, 'Position', [0.355, 0.12, 0.22, 0.63], 'FontSize', 11.5); 
 hold(ax2, 'on');
 
 h_noise = scatter(ax2, lpow_artifacts, ssi_artifacts, 38, col_noise, ...
@@ -160,7 +160,7 @@ yline(ax2, 1, '--', 'Color', col_star, 'LineWidth', 1.5, 'Alpha', 0.6);
 h_star = scatter(ax2, ideal_power_target, 1, 250, col_star, 'p', 'filled', 'MarkerEdgeColor', 'k');
 
 ylim(ax2, [-0.05 1.15]);
-ylabel(ax2, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 11);
+ylabel(ax2, sprintf('SSI (geom. mean of top-%d PC cosines)', SSI_top_PCs), 'FontSize', 13, 'FontWeight', 'bold');
 set(ax2, 'YTickMode', 'auto', 'YTickLabelMode', 'auto', 'TickDir', 'both');
 grid(ax2, 'off');
 
@@ -205,9 +205,9 @@ if ~isempty(lda_full)
 end
 text(ax2, ideal_power_target, 1.10, 'Leadfield Subspace', 'FontSize', 10, 'Color', 0.5*col_star, 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
 
-xlabel(ax2, 'Epoch Power (dB)', 'FontSize', 11);
+xlabel(ax2, 'Epoch Power (dB)', 'FontSize', 13, 'FontWeight', 'bold');
 legend(ax2, [h_star, h_sig, h_noise], {'Leadfield Subspace', sprintf('Signal (mean SSI=%.2f)', mean(ssi_after)), sprintf('Noise (mean SSI=%.2f)', mean(ssi_artifacts))}, ...
-       'Location', 'northeastoutside', 'FontSize', 10);
+       'Position', [0.585, 0.77, 0.085, 0.08], 'FontSize', 8.5);
 
 try
     sgtitle(plot_title, 'FontSize', 13, 'FontWeight', 'bold');
@@ -233,14 +233,209 @@ else
 end
 add_marginal_densities(ax2, {lpow_after, lpow_artifacts}, {ssi_after, ssi_artifacts}, {col_sig, col_noise}, SSI_top_PCs, ttl2);
 
+% --- Far-Right Panels: Dual Topoplots (Denoised Power [Upper] & ENOVA [Lower]) ---
+figure(fig);
+
+% 1. Compute Denoised Channel Power
+pow_clean_raw = var(double(EEGclean.data), 0, 2);
+total_gfp     = sum(pow_clean_raw);
+pow_clean_gfp = (pow_clean_raw ./ max(total_gfp, eps)) * 100;
+pow_clean_db  = 10 * log10(max(pow_clean_raw, eps));
+
+% 2. Compute ENOVA per Channel
+if nargin >= 14 && ~isempty(ENOVA_per_channel)
+    enova_ch = ENOVA_per_channel;
+elseif isfield(EEGclean, 'etc') && isfield(EEGclean.etc, 'GEDAI') && isfield(EEGclean.etc.GEDAI, 'ENOVA_per_channel') && ~isempty(EEGclean.etc.GEDAI.ENOVA_per_channel)
+    enova_ch = EEGclean.etc.GEDAI.ENOVA_per_channel;
+else
+    var_noise = var(double(EEGartifacts.data), 0, 2);
+    var_orig  = var(double(EEGavRef.data(:, 1:size(EEGartifacts.data, 2))), 0, 2);
+    enova_ch  = var_noise ./ max(var_orig, eps);
+end
+
+enova_plot_val = double(enova_ch(:));
+% Convert proportion (0-1) to percentage if not already in percent
+finite_vals = enova_plot_val(isfinite(enova_plot_val));
+if ~isempty(finite_vals) && max(finite_vals) <= 1.5
+    enova_plot_val = enova_plot_val * 100;
+end
+% Clamp between 0% and 100% for topoplot (bad/flat channels get 100%)
+enova_plot_val(isinf(enova_plot_val) | enova_plot_val > 100) = 100;
+enova_plot_val(isnan(enova_plot_val)) = 0;
+
+chanlocs = EEGclean.chanlocs;
+
+% Ensure all channels have valid coordinates by auto-matching against standard 10-20 templates if needed
+if isfield(chanlocs, 'labels') && ~isempty(chanlocs)
+    needs_coord = false(1, length(chanlocs));
+    for cIdx = 1:length(chanlocs)
+        has_polar = isfield(chanlocs(cIdx), 'theta') && ~isempty(chanlocs(cIdx).theta) && ...
+                    isnumeric(chanlocs(cIdx).theta) && ~isnan(chanlocs(cIdx).theta) && ...
+                    isfield(chanlocs(cIdx), 'radius') && ~isempty(chanlocs(cIdx).radius) && ...
+                    isnumeric(chanlocs(cIdx).radius) && ~isnan(chanlocs(cIdx).radius);
+        if ~has_polar
+            needs_coord(cIdx) = true;
+        end
+    end
+    
+    if any(needs_coord)
+        ced_path = which('Standard-10-20-Cap81.ced');
+        if isempty(ced_path)
+            ced_path = which('Standard-10-20-Cap19.ced');
+        end
+        if ~isempty(ced_path) && exist('readlocs', 'file')
+            try
+                tmpl_locs = readlocs(ced_path);
+                tmpl_labels = upper(strtrim({tmpl_locs.labels}));
+                for cIdx = find(needs_coord)
+                    curr_lbl = upper(strtrim(chanlocs(cIdx).labels));
+                    match_pos = find(strcmp(curr_lbl, tmpl_labels), 1);
+                    if ~isempty(match_pos)
+                        chanlocs(cIdx).theta  = tmpl_locs(match_pos).theta;
+                        chanlocs(cIdx).radius = tmpl_locs(match_pos).radius;
+                        chanlocs(cIdx).X      = tmpl_locs(match_pos).X;
+                        chanlocs(cIdx).Y      = tmpl_locs(match_pos).Y;
+                        chanlocs(cIdx).Z      = tmpl_locs(match_pos).Z;
+                        if isfield(tmpl_locs, 'sph_theta'), chanlocs(cIdx).sph_theta = tmpl_locs(match_pos).sph_theta; end
+                        if isfield(tmpl_locs, 'sph_phi'),   chanlocs(cIdx).sph_phi   = tmpl_locs(match_pos).sph_phi;   end
+                        if isfield(tmpl_locs, 'sph_radius'),chanlocs(cIdx).sph_radius= tmpl_locs(match_pos).sph_radius;end
+                    end
+                end
+            catch
+            end
+        end
+    end
+end
+
+% A topoplot requires at least 3 valid channels; otherwise fall back to bar plot
+num_valid_coords = 0;
+if isfield(chanlocs, 'theta')
+    valid_mask = ~cellfun(@isempty, {chanlocs.theta}) & ~cellfun(@(x) any(isnan(x)), {chanlocs.theta});
+    num_valid_coords = sum(valid_mask);
+end
+has_coords = (num_valid_coords >= 3);
+
+% --- Upper Panel: Average PSD Across Electrodes (0.5 Hz Resolution) Before vs After ---
+ax_psd = axes('Position', [0.690, 0.510, 0.250, 0.210]);
+hold(ax_psd, 'on');
+
+% Compute PSD at exact 0.5 Hz resolution (2-second window)
+srate_psd = EEGclean.srate;
+nfft_psd = round(2 * srate_psd);
+noverlap_psd = round(nfft_psd / 2);
+w_psd = 0.5 * (1 - cos(2 * pi * (0:nfft_psd-1)' / (nfft_psd - 1)));
+
+data_before = double(EEGavRef.data(:, 1:size(EEGclean.data, 2)));
+data_after  = double(EEGclean.data);
+data_noise  = double(EEGartifacts.data(:, 1:size(EEGclean.data, 2)));
+
+if exist('pwelch', 'file')
+    [pxx_b, f_psd] = pwelch(data_before', w_psd, noverlap_psd, nfft_psd, srate_psd);
+    [pxx_a, ~]     = pwelch(data_after', w_psd, noverlap_psd, nfft_psd, srate_psd);
+    [pxx_n, ~]     = pwelch(data_noise', w_psd, noverlap_psd, nfft_psd, srate_psd);
+else
+    [pxx_b, f_psd] = SENSAI_compute_welch_psd(data_before, srate_psd, nfft_psd, w_psd, noverlap_psd);
+    [pxx_a, ~]     = SENSAI_compute_welch_psd(data_after, srate_psd, nfft_psd, w_psd, noverlap_psd);
+    [pxx_n, ~]     = SENSAI_compute_welch_psd(data_noise, srate_psd, nfft_psd, w_psd, noverlap_psd);
+end
+
+% ENOVA-weighted PSD across electrodes
+w_ch = enova_plot_val(:);
+if sum(w_ch) <= 0 || any(isnan(w_ch))
+    w_ch = ones(size(w_ch)) / length(w_ch);
+else
+    w_ch = w_ch / sum(w_ch);
+end
+
+psd_b_weighted = pxx_b * w_ch;
+psd_a_weighted = pxx_a * w_ch;
+psd_n_weighted = pxx_n * w_ch;
+
+psd_b_db = 10 * log10(max(psd_b_weighted, eps));
+psd_a_db = 10 * log10(max(psd_a_weighted, eps));
+psd_n_db = 10 * log10(max(psd_n_weighted, eps));
+
+% Restrict display to clinical EEG range (0.5 Hz to 45 Hz)
+max_f_disp = min(45, srate_psd / 2);
+f_mask = (f_psd >= 0.5 & f_psd <= max_f_disp);
+f_disp = f_psd(f_mask);
+pb_disp = psd_b_db(f_mask);
+pa_disp = psd_a_db(f_mask);
+pn_disp = psd_n_db(f_mask);
+
+h_psd_b = plot(ax_psd, f_disp, pb_disp, '-', 'Color', [0.25 0.45 0.75], 'LineWidth', 1.8);
+h_psd_a = plot(ax_psd, f_disp, pa_disp, '-', 'Color', [0.08 0.68 0.25], 'LineWidth', 2.0);
+h_psd_n = plot(ax_psd, f_disp, pn_disp, '-', 'Color', [0.85 0.18 0.18], 'LineWidth', 1.8);
+
+xlim(ax_psd, [0.5, max_f_disp]);
+xlabel(ax_psd, 'Frequency (Hz)', 'FontSize', 12.5, 'FontWeight', 'bold');
+ylabel(ax_psd, 'PSD (dB)', 'FontSize', 12.5, 'FontWeight', 'bold');
+title(ax_psd, 'ENOVA-weighted PSD over channels', 'FontSize', 12.5, 'FontWeight', 'bold');
+grid(ax_psd, 'on');
+box(ax_psd, 'off');
+set(ax_psd, 'Color', 'w', 'FontSize', 11.5);
+legend(ax_psd, [h_psd_b, h_psd_a, h_psd_n], {'Original', 'Signal', 'Noise'}, 'Location', 'northeast', 'FontSize', 9.5, 'Box', 'off');
+
+% --- Lower Topoplot: Post-Denoising ENOVA per Channel ---
+ax_topo_enova = axes('Position', [0.720, 0.120, 0.14, 0.22]);
+mean_enova_disp = mean(enova_plot_val, 'omitnan');
+
+plot_done = false;
+if has_coords && exist('topoplot', 'file')
+    axes(ax_topo_enova);
+    try
+        topoplot(enova_plot_val, chanlocs, 'style', 'both', 'electrodes', 'on', ...
+                 'shading', 'flat', 'gridscale', 120, 'conv', 'off', 'headrad', 'rim', 'whitebk', 'on');
+        colormap(ax_topo_enova, 'turbo');
+        cb_enova = colorbar(ax_topo_enova, 'Position', [0.875, 0.135, 0.009, 0.19]);
+        cb_enova.Label.String = 'ENOVA (%)';
+        cb_enova.Label.FontSize = 11.5; cb_enova.FontSize = 10.5;
+        cb_enova.Label.FontWeight = 'bold';
+        caxis(ax_topo_enova, [0, 100]);
+        title(ax_topo_enova, 'ENOVA (Explained Noise Variance)', ...
+              'FontSize', 12, 'FontWeight', 'bold');
+        plot_done = true;
+    catch ME_topo
+        warning('SENSAI:topoplotFallback', 'Topoplot failed (%s). Falling back to bar plot.', ME_topo.message);
+        cla(ax_topo_enova);
+    end
+end
+if ~plot_done
+    axes(ax_topo_enova);
+    bar(ax_topo_enova, 1:length(enova_plot_val), enova_plot_val, 'FaceColor', [0.85 0.35 0.25], 'EdgeColor', 'none');
+    ax_topo_enova.XTick = 1:length(enova_plot_val);
+    if isfield(chanlocs, 'labels')
+        ax_topo_enova.XTickLabel = {chanlocs.labels};
+        ax_topo_enova.XTickLabelRotation = 45;
+    end
+    ylabel(ax_topo_enova, 'ENOVA (%)', 'FontSize', 12, 'FontWeight', 'bold');
+    title(ax_topo_enova, 'ENOVA (Explained Noise Variance)', ...
+          'FontSize', 12, 'FontWeight', 'bold');
+    grid(ax_topo_enova, 'on'); box(ax_topo_enova, 'off');
+end
+
+% Preserve colormaps across all panels
+colormap(ax1, parula);
+if exist('bg_cmap', 'var') && ~isempty(bg_cmap)
+    colormap(ax2, bg_cmap);
+end
+colormap(ax_topo_enova, 'turbo');
+
 metrics = struct('ssi_before_mean', mean(ssi_before), ...
                  'ssi_after_mean', mean(ssi_after), ...
                  'ssi_artifacts_mean', mean(ssi_artifacts), ...
                  'lda_accuracy', lda_accuracy, ...
                  'signal_silhouette', sil_signal, ...
-                 'ideal_power_target_db', ideal_power_target);
+                 'ideal_power_target_db', ideal_power_target, ...
+                 'enova_per_channel', enova_ch, ...
+                 'psd_before_db', psd_b_db, ...
+                 'psd_after_db', psd_a_db, ...
+                 'psd_noise_db', psd_n_db, ...
+                 'psd_freqs', f_psd, ...
+                 'enova_weights', w_ch);
 
 % --- Instant Reveal ---
+set(fig, 'Color', 'w', 'InvertHardcopy', 'off');
 set(fig, 'Visible', 'on');
 drawnow;
 
@@ -290,16 +485,15 @@ function add_marginal_densities(ax, x_data, y_data, cols, SSI_top_PCs, ttl)
     set(ax, 'Units', 'normalized'); 
     pos = ax.Position; 
     margin = 0.01; 
-    m_size = 0.12;
     
-    % Strict manual sizing to ensure perfect symmetry between left and right panels
-    new_w = 0.28; 
-    new_h = 0.65;
+    % Strict manual sizing for 3-panel layout
+    new_w = 0.22; 
+    new_h = 0.63;
     
     set(ax, 'Position', [pos(1), pos(2), new_w, new_h]);
-    ax_x = axes('Position', [pos(1), pos(2) + new_h + margin, new_w, pos(4) * m_size], 'Units', 'normalized', 'Color', 'none', 'XLim', ax.XLim, 'XTick', [], 'YTick', [], 'XAxisLocation', 'bottom', 'Box', 'off');
+    ax_x = axes('Position', [pos(1), pos(2) + new_h + margin, new_w, 0.085], 'Units', 'normalized', 'Color', 'none', 'XLim', ax.XLim, 'XTick', [], 'YTick', [], 'XAxisLocation', 'bottom', 'Box', 'off');
     hold(ax_x, 'on'); title(ax_x, ttl, 'FontSize', 11);
-    ax_y = axes('Position', [pos(1) + new_w + margin, pos(2), pos(3) * m_size, new_h], 'Units', 'normalized', 'Color', 'none', 'YLim', ax.YLim, 'YTick', [], 'XTick', [], 'YAxisLocation', 'left', 'Box', 'off');
+    ax_y = axes('Position', [pos(1) + new_w + margin, pos(2), 0.025, new_h], 'Units', 'normalized', 'Color', 'none', 'YLim', ax.YLim, 'YTick', [], 'XTick', [], 'YAxisLocation', 'left', 'Box', 'off');
     hold(ax_y, 'on');
     for i = 1:length(x_data)
         try [f, xi] = ksdensity(x_data{i}); fill(ax_x, xi, f, cols{i}, 'FaceAlpha', 0.2, 'EdgeColor', cols{i}, 'LineWidth', 1); catch, end
@@ -311,4 +505,25 @@ function add_marginal_densities(ax, x_data, y_data, cols, SSI_top_PCs, ttl)
         ax_y.XAxis.Visible = 'off'; ax_y.YAxis.Visible = 'off';
     end
     uistack(ax, 'top');
+end
+function [pxx, freqs] = SENSAI_compute_welch_psd(data, srate, nfft, w, noverlap)
+    n_chans = size(data, 1);
+    step = nfft - noverlap;
+    n_pnts = size(data, 2);
+    starts = 1:step:(n_pnts - nfft + 1);
+    if isempty(starts), starts = 1; data = [data, zeros(n_chans, nfft - n_pnts)]; end
+    n_segs = length(starts);
+    w_norm = sum(w.^2);
+    w_mat = repmat(w', n_chans, 1);
+    acc = zeros(nfft/2 + 1, n_chans);
+    for s_idx = 1:n_segs
+        seg = double(data(:, starts(s_idx):starts(s_idx)+nfft-1));
+        seg = (seg - mean(seg, 2)) .* w_mat;
+        fft_seg = fft(seg, nfft, 2);
+        p = (abs(fft_seg(:, 1:nfft/2+1)).^2) / (srate * w_norm);
+        p(:, 2:end-1) = 2 * p(:, 2:end-1);
+        acc = acc + p';
+    end
+    pxx = acc / n_segs;
+    freqs = (0:nfft/2)' * (srate / nfft);
 end
