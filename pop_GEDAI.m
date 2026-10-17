@@ -75,13 +75,32 @@ addParameter(p, 'parallel_processing', false); % Add output visual parameter
 addParameter(p, 'visualization_A', false); % Add output visual parameter
 p.parse(varargin{:}); % Parse the input arguments
 
-% Create GUI for parameter input (compact 10-row layout)
-str_strength = [pad_center('auto') '|' pad_center('auto+') '|' pad_center('auto-')];
+% Create GUI for parameter input (compact 12-row layout with geodesic blending)
+str_strength = [pad_center('auto') '|' ...
+                pad_center('auto+') '|' ...
+                pad_center('auto-') '|' ...
+                pad_center('BayesOpt')];
 str_leadfield = [pad_center('precomputed') '|' pad_center('interpolated') '|' pad_center('warped')];
+
+str_prior_blend = [pad_center('off (leadfield only)') '|' ...
+                   pad_center('gamma = 0.50 (EWOK blend)') '|' ...
+                   pad_center('BayesOpt (maximize SENSAI)') '|' ...
+                   pad_center('gamma = 0.25') '|' ...
+                   pad_center('gamma = 0.75') '|' ...
+                   pad_center('gamma = 1.00 (empirical EC)')];
+
+str_target_band = [pad_center('Alpha (8-13 Hz)') '|' ...
+                   pad_center('Broadband (0.5-45 Hz)') '|' ...
+                   pad_center('Theta (4-8 Hz)') '|' ...
+                   pad_center('Beta (13-30 Hz)') '|' ...
+                   pad_center('Delta (1-4 Hz)') '|' ...
+                   pad_center('Gamma (30-45 Hz)')];
 
 uilist = { ...    
     {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' str_strength 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Leadfield matrix'}    {'style' 'popupmenu' 'string' str_leadfield 'horizontalalignment' 'center'} ...
+    {'style' 'text' 'string' 'Prior geodesic blending (EWOK)'} {'style' 'popupmenu' 'string' str_prior_blend 'tag' 'prior_blend_popup' 'horizontalalignment' 'center'} ...
+    {'style' 'text' 'string' 'Empirical EC target band'} {'style' 'popupmenu' 'string' str_target_band 'tag' 'prior_target_band_popup' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Sliding window (seconds, Inf=all)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds' 'horizontalalignment' 'center'} ...
@@ -92,18 +111,39 @@ uilist = { ...
     {'style' 'checkbox' 'string' ' Parallel processing ( > RAM)' 'tag' 'parallel_processing' 'Value' 1} ...
     {'style' 'checkbox' 'string' ' Artifact visualization' 'tag' 'visualization_A' 'Value' 1} ...
 };
-geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1] };
-title = '  GEDAI denoising toolbox |  v1.8  ';
+geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1] };
+title = '  GEDAI denoising toolbox |  v1.9 (EWOK Geodesic Blending)  ';
 
 % Get user input
 [userInput, ~, ~, out] = inputgui( 'geometry', geometry, 'uilist', uilist, 'helpcom', 'help(''GEDAI'')', 'title', title, 'skipline', 'off');
 if isempty(out), return; end
 
-threshold_cell = {'auto', 'auto+', 'auto-'};
+threshold_cell = {'auto', 'auto+', 'auto-', 'bayesopt'};
 artifact_threshold = threshold_cell{userInput{1}};
 
 ref_matrix_cell = {'precomputed', 'interpolated', 'warped'};
 ref_matrix_type = ref_matrix_cell{userInput{2}};
+
+% Parse Prior Geodesic Blending selection
+blend_options = {'off', 0.50, 'bayesopt', 0.25, 0.75, 1.00};
+target_band_options = {'Alpha', 'Broadband', 'Theta', 'Beta', 'Delta', 'Gamma'};
+
+blend_idx = 1;
+if isfield(out, 'prior_blend_popup') && ~isempty(out.prior_blend_popup)
+    blend_raw = out.prior_blend_popup;
+    if iscell(blend_raw), blend_raw = blend_raw{1}; end
+    blend_idx = max(1, min(length(blend_options), round(double(blend_raw))));
+end
+prior_blend_val = blend_options{blend_idx};
+
+band_idx = 1;
+if isfield(out, 'prior_target_band_popup') && ~isempty(out.prior_target_band_popup)
+    band_raw = out.prior_target_band_popup;
+    if iscell(band_raw), band_raw = band_raw{1}; end
+    band_idx = max(1, min(length(target_band_options), round(double(band_raw))));
+end
+prior_target_band = target_band_options{band_idx};
+
 epoch_size_in_cycles = str2double(out.epoch_size_in_cycles);
 lowcut_frequency = str2double(out.lowcut_frequency);
 
@@ -166,9 +206,11 @@ else
     output_reference_channel = strtrim(selected_output_reference_channel);
 end
 
-[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
+[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ...
+    ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ...
+    ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel, ...
+    'prior_blend', prior_blend_val, 'prior_target_band', prior_target_band);
   
 EEG = eegh(com, EEG); % update EEG.history
-    
 
 end
