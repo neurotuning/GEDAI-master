@@ -109,7 +109,8 @@ if nargin >= 10 && ~isempty(SENSAI_score)
     if isempty(artifact_threshold_type), artifact_threshold_type = 'auto'; end
     if isempty(smoothing_window_seconds), smoothing_window_seconds = Inf; end
 
-    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%, ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '% [' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
+    spacer = '              '; % Doubled whitespace separation (2 tabs)
+    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%' spacer 'ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '%' spacer '[' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
 else
     plot_title = 'SENSAI visualization:  Subspace Similarity  vs  Epoch Power';
 end
@@ -368,7 +369,7 @@ h_psd_n = plot(ax_psd, f_disp, pn_disp, '-', 'Color', [0.85 0.18 0.18], 'LineWid
 
 xlim(ax_psd, [0.5, max_f_disp]);
 xlabel(ax_psd, 'Frequency (Hz)', 'FontSize', 14, 'FontWeight', 'bold');
-ylabel(ax_psd, 'PSD (dB)', 'FontSize', 14, 'FontWeight', 'bold');
+ylabel(ax_psd, 'Power (dB)', 'FontSize', 14, 'FontWeight', 'bold');
 title(ax_psd, 'ENOVA-weighted PSD over channels', 'FontSize', 14.5, 'FontWeight', 'bold');
 grid(ax_psd, 'on');
 box(ax_psd, 'off');
