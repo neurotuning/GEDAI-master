@@ -15,6 +15,9 @@ function [SENSAI_score, SIGNAL_subspace_similarity, NOISE_subspace_similarity, m
 
     %   Calculates the Signal & Noise Subspace Alignment Index (SENSAI) from raw EEG data
     
+if ndims(refCOV) == 3
+    refCOV = mean(refCOV, 3);
+end
 refCOV = real(refCOV);
 refCOV = (refCOV + refCOV') / 2;
 regularization_lambda = 0.05;

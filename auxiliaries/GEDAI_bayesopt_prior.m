@@ -1,17 +1,26 @@
-function [best_gamma, best_SENSAI, C_optimal, opt_results] = GEDAI_bayesopt_prior(data, srate, chanlocs, C_LF, C_EC, max_evals, verbose, plot_opt)
-% GEDAI_BAYESOPT_PRIOR - Outer Bayesian Optimization loop to find the optimal
+function [best_gamma, best_SENSAI, C_optimal, opt_results] = GEDAI_bayesopt_prior(...
+    data, srate, chanlocs, C_LF, C_EC, max_evals, verbose, plot_opt, ...
+    artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel)
+% GEDAI_BAYESOPT_PRIOR - Bayesian Optimization loop to find the optimal
 % EWOK Riemannian blending parameter gamma in [0, 1] between the theoretical
-% leadfield prior and empirical EC centroid that maximizes the SENSAI score.
+% leadfield prior (C_LF) and empirical EC centroid (C_EC) that maximizes
+% the SENSAI score evaluated against the invariant anatomical reference (C_LF).
 %
 % Inputs:
-%   data       - (nbchan x pnts) double EEG sensor data
-%   srate      - Sampling rate in Hz
-%   chanlocs   - EEG.chanlocs struct
-%   C_LF       - Theoretical leadfield covariance prior (nbchan x nbchan)
-%   C_EC       - Empirical EC covariance centroid (nbchan x nbchan)
-%   max_evals  - Maximum Bayesian optimization evaluations (default = 15)
-%   verbose    - 1 to print log, 0 for quiet (default = 1)
-%   plot_opt   - Boolean to show bayesopt progress plot (default = false)
+%   data                     - (nbchan x pnts) double EEG sensor data
+%   srate                    - Sampling rate in Hz
+%   chanlocs                 - EEG.chanlocs struct
+%   C_LF                     - Theoretical leadfield covariance prior (nbchan x nbchan)
+%   C_EC                     - Empirical EC covariance centroid (nbchan x nbchan)
+%   max_evals                - Maximum Bayesian optimization evaluations (default = 15)
+%   verbose                  - 1 to print log, 0 for quiet (default = 1)
+%   plot_opt                 - Boolean to show bayesopt progress plot (default = false)
+%   artifact_threshold_type  - Threshold level ('auto', 'auto+', 'auto-', or numeric)
+%   epoch_size_in_cycles     - Epoch size in cycles (default = 12)
+%   lowcut_frequency         - Low-cut frequency in Hz (default = 0.5)
+%   signal_type              - 'eeg' or 'meg' (default = 'eeg')
+%   smoothing_window_seconds - Sliding window size in seconds (default = Inf)
+%   output_reference_channel - Target montage reference channel (default = '')
 %
 % Outputs:
 %   best_gamma  - Optimal blending parameter in [0, 1]
@@ -22,28 +31,40 @@ function [best_gamma, best_SENSAI, C_optimal, opt_results] = GEDAI_bayesopt_prio
 if nargin < 6 || isempty(max_evals), max_evals = 15; end
 if nargin < 7 || isempty(verbose), verbose = 1; end
 if nargin < 8 || isempty(plot_opt), plot_opt = false; end
+if nargin < 9 || isempty(artifact_threshold_type), artifact_threshold_type = 'auto'; end
+if nargin < 10 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
+if nargin < 11 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
+if nargin < 12 || isempty(signal_type), signal_type = 'eeg'; end
+if nargin < 13 || isempty(smoothing_window_seconds), smoothing_window_seconds = Inf; end
+if nargin < 14 || isempty(output_reference_channel), output_reference_channel = ''; end
 
 % Ensure data is double
 data = double(data);
+pnts = size(data, 2);
 
-% Limit evaluation data to 60 seconds for ultra-fast surrogate convergence
-max_samples = round(60 * srate);
-if size(data, 2) > max_samples
-    eval_data = data(:, 1:max_samples);
-else
+% Subsample evaluation data: use full dataset if <= 180s (3 minutes),
+% or 3 representative 30-second segments (start, mid, end) for longer recordings
+max_eval_pnts = round(180 * srate);
+if pnts <= max_eval_pnts
     eval_data = data;
+else
+    seg_len = round(30 * srate);
+    idx1 = 1:seg_len;
+    mid_start = round(pnts/2 - seg_len/2);
+    idx2 = mid_start:(mid_start + seg_len - 1);
+    idx3 = (pnts - seg_len + 1):pnts;
+    eval_data = [data(:, idx1), data(:, idx2), data(:, idx3)];
 end
 
-epoch_size = 1.0; % 1-second epochs for SENSAI evaluation
-noise_mult = 1.0;
+% Define objective function using true multi-band GEDAI on evaluation data,
+% evaluating SENSAI against the INVARIANT anatomical reference C_LF
+obj_fun = @(tbl) eval_objective(tbl.gamma, eval_data, srate, chanlocs, C_LF, C_EC, ...
+    artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel);
 
-% Define objective function using true multi-band GEDAI on evaluation data
-obj_fun = @(tbl) eval_objective(tbl.gamma, eval_data, srate, chanlocs, C_LF, C_EC);
-
-% Optimization variable
+% Optimization variable: gamma in [0, 1]
 opt_gamma = optimizableVariable('gamma', [0, 1], 'Type', 'real');
 
-% Explicit seed points guaranteeing that gamma = 0.0 (leadfield / 'off') is evaluated
+% Explicit seed points guaranteeing that gamma = 0.0 (pure leadfield baseline) is evaluated first
 seed_gammas = [0.0; 0.25; 0.50; 0.75; 1.0];
 if max_evals < 5
     seed_gammas = seed_gammas(1:max_evals);
@@ -59,7 +80,7 @@ end
 if verbose
     fprintf('\n=== GEDAI: Bayesian Optimization of Prior Geodesic Blending ===\n');
     fprintf('  Evaluating gamma in [0, 1] (0 = Leadfield, 1 = Empirical EC Centroid)\n');
-    fprintf('  Objective: Maximize SENSAI score (Evaluating %d iterations)...\n', max_evals);
+    fprintf('  Objective: Maximize SENSAI score vs invariant leadfield prior (Evaluating %d iterations)...\n', max_evals);
 end
 
 % Suppress warnings during optimization
@@ -77,10 +98,21 @@ opt_results = bayesopt(obj_fun, opt_gamma, ...
 best_gamma = opt_results.XAtMinObjective.gamma;
 best_SENSAI = -opt_results.MinObjective;
 
-% Compute final optimal blended covariance
-C_optimal = GEDAI_ewok_geodesic_blend(C_LF, C_EC, best_gamma);
+% Baseline check at gamma = 0.0
+baseline_sensai = -eval_objective(0.0, eval_data, srate, chanlocs, C_LF, C_EC, ...
+    artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel);
+
+% Monotonic baseline guarantee: If blending does not outperform baseline leadfield, retain gamma = 0.0
+if best_SENSAI < baseline_sensai
+    best_gamma = 0.0;
+    best_SENSAI = baseline_sensai;
+    C_optimal = C_LF;
+else
+    C_optimal = GEDAI_ewok_geodesic_blend(C_LF, C_EC, best_gamma);
+end
 
 if verbose
+    fprintf('  Baseline Leadfield SENSAI:  %+.2f %%\n', baseline_sensai);
     fprintf('  Optimal Blending Parameter: gamma* = %.4f\n', best_gamma);
     fprintf('  Maximal SENSAI Score:       %+.2f %%\n', best_SENSAI);
     fprintf('=================================================================\n\n');
@@ -88,11 +120,13 @@ end
 
 end
 
-function neg_sensai = eval_objective(gamma_val, data, srate, chanlocs, C_LF, C_EC)
+function neg_sensai = eval_objective(gamma_val, data, srate, chanlocs, C_LF, C_EC, ...
+    artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel)
+
     % 1. Blend reference covariance along geodesic
     C_trial = GEDAI_ewok_geodesic_blend(C_LF, C_EC, gamma_val);
     
-    % 2. Evaluate true multi-band GEDAI with candidate covariance
+    % 2. Clean evaluation data with candidate covariance
     try
         EEG_eval = struct();
         EEG_eval.data = data;
@@ -105,7 +139,13 @@ function neg_sensai = eval_objective(gamma_val, data, srate, chanlocs, C_LF, C_E
         EEG_eval.xmax = (EEG_eval.pnts - 1) / srate;
         EEG_eval.etc = struct();
         
-        [~, ~, sensai] = GEDAI(EEG_eval, 'auto', 12, 0.5, C_trial, false, false, Inf, Inf, 'eeg', Inf, '', struct('silent', true));
+        pass_opts = struct('silent', true);
+        [EEG_clean_eval, EEG_art_eval] = GEDAI(EEG_eval, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ...
+            C_trial, false, false, Inf, Inf, signal_type, smoothing_window_seconds, output_reference_channel, ...
+            'prior_blend', 'off', pass_opts);
+        
+        % 3. Evaluate SENSAI against the invariant anatomical reference C_LF
+        sensai = SENSAI_basic(double(EEG_clean_eval.data), double(EEG_art_eval.data), srate, 1, C_LF, 1.0, signal_type);
         neg_sensai = -sensai;
     catch
         neg_sensai = 1e3; % Penalty on numerical failure

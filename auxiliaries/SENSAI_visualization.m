@@ -65,6 +65,9 @@ elseif num_epochs_before < num_epochs_after
 end
 
 %% ── 2. Subspace Analysis ───────────────────────────────────────────────
+if ndims(ref_cov) == 3
+    ref_cov = mean(ref_cov, 3);
+end
 [Vref, Dref] = eig(ref_cov);
 [~, idx]     = sort(diag(Dref), 'descend');
 basis_ref    = Vref(:, idx(1:SSI_top_PCs));
