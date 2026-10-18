@@ -4,7 +4,7 @@ function [best_gamma, best_SENSAI, C_optimal, opt_results] = GEDAI_bayesopt_prio
 % GEDAI_BAYESOPT_PRIOR - Bayesian Optimization loop to find the optimal
 % EWOK Riemannian blending parameter gamma in [0, 1] between the theoretical
 % leadfield prior (C_LF) and empirical EC centroid (C_EC) that maximizes
-% the SENSAI score evaluated against the invariant anatomical reference (C_LF).
+% the SENSAI score evaluated against the candidate blended prior (C_trial).
 %
 % Inputs:
 %   data                     - (nbchan x pnts) double EEG sensor data
@@ -57,7 +57,7 @@ else
 end
 
 % Define objective function using true multi-band GEDAI on evaluation data,
-% evaluating SENSAI against the INVARIANT anatomical reference C_LF
+% evaluating SENSAI against the candidate blended reference C_trial
 obj_fun = @(tbl) eval_objective(tbl.gamma, eval_data, srate, chanlocs, C_LF, C_EC, ...
     artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel);
 
@@ -80,7 +80,7 @@ end
 if verbose
     fprintf('\n=== GEDAI: Bayesian Optimization of Prior Geodesic Blending ===\n');
     fprintf('  Evaluating gamma in [0, 1] (0 = Leadfield, 1 = Empirical EC Centroid)\n');
-    fprintf('  Objective: Maximize SENSAI score vs invariant leadfield prior (Evaluating %d iterations)...\n', max_evals);
+    fprintf('  Objective: Maximize SENSAI score vs candidate blended prior (Evaluating %d iterations)...\n', max_evals);
 end
 
 % Suppress warnings during optimization
@@ -144,8 +144,8 @@ function neg_sensai = eval_objective(gamma_val, data, srate, chanlocs, C_LF, C_E
             C_trial, false, false, Inf, Inf, signal_type, smoothing_window_seconds, output_reference_channel, ...
             'prior_blend', 'off', pass_opts);
         
-        % 3. Evaluate SENSAI against the invariant anatomical reference C_LF
-        sensai = SENSAI_basic(double(EEG_clean_eval.data), double(EEG_art_eval.data), srate, 1, C_LF, 1.0, signal_type);
+        % 3. Evaluate SENSAI against the candidate blended reference C_trial
+        sensai = SENSAI_basic(double(EEG_clean_eval.data), double(EEG_art_eval.data), srate, 1, C_trial, 1.0, signal_type);
         neg_sensai = -sensai;
     catch
         neg_sensai = 1e3; % Penalty on numerical failure

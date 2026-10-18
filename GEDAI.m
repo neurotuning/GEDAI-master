@@ -471,6 +471,15 @@ if ENOVA_threshold_per_channel < inf
                 EEGavRef_for_vis = EEGin;
             end
 
+            % Extract optimal blend gamma and blend status from Pass 2 if available
+            if isfield(EEGclean, 'etc') && isfield(EEGclean.etc, 'GEDAI') && isfield(EEGclean.etc.GEDAI, 'prior_blend_gamma')
+                optimal_blend_gamma = EEGclean.etc.GEDAI.prior_blend_gamma;
+                is_blended_requested = (optimal_blend_gamma > 0) || (~isnumeric(prior_blend) && ~strcmpi(char(prior_blend), 'off'));
+            else
+                optimal_blend_gamma = 0;
+                is_blended_requested = false;
+            end
+
             % Create refCOV for full channel space
             refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference);
             if is_blended_requested && strcmp(signal_type, 'eeg') && ~isempty(refCOV_full)
@@ -1431,11 +1440,7 @@ if ~isempty(regions)
 end
 
 % Calculate final SENSAI score (after potential epoch rejection)
-
 refCOV_eval = refCOV;
-if is_blended_requested && exist('C_LF', 'var') && ~isempty(C_LF)
-    refCOV_eval = C_LF;
-end
 [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, 1, refCOV_eval, noise_multiplier, signal_type);
 
 % disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
