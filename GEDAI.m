@@ -611,15 +611,20 @@ else
     EEGavRef = EEG_av;
 end
 
-%% Riemannian Prior Geodesic Blending (EWOK Framework) / 2-Pass Linear Blending
+%% Riemannian Prior Geodesic Blending (EWOK Framework) / Subspace McCann / 2-Pass Linear Blending
 optimal_blend_gamma = 0;
 is_blended_requested = false;
+is_subspace_mccann_requested = false;
 is_2pass_requested = false;
 is_option4_requested = false;
 if ischar(prior_blend) || isstring(prior_blend)
     str_blend_lower = lower(char(prior_blend));
-    is_option4_requested = contains(str_blend_lower, 'option4') || contains(str_blend_lower, 'enova');
-    is_2pass_requested = contains(str_blend_lower, '2pass') && ~is_option4_requested;
+    is_subspace_mccann_requested = contains(str_blend_lower, 'subspace_mccann') || ...
+        contains(str_blend_lower, 'semiblind') || contains(str_blend_lower, 'mccann');
+    is_option4_requested = ~is_subspace_mccann_requested && ...
+        (contains(str_blend_lower, 'option4') || contains(str_blend_lower, 'enova'));
+    is_2pass_requested = ~is_subspace_mccann_requested && ...
+        contains(str_blend_lower, '2pass') && ~is_option4_requested;
     is_blended_requested = ~strcmpi(str_blend_lower, 'off');
 elseif isnumeric(prior_blend) && isscalar(prior_blend)
     is_blended_requested = (prior_blend > 0);
@@ -629,7 +634,15 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
     try
         C_LF = refCOV;
         
-        if is_option4_requested
+        if is_subspace_mccann_requested
+            % Generative Semi-Blind Band-Selective Subspace McCann Leadfield Tuning
+            if ~silent_mode
+                disp([newline 'Executing Generative Semi-Blind McCann Leadfield Tuning (K=6, Band-Selective 3D Prior)...']);
+            end
+            [refCOV, ~, ~, ~, optimal_blend_gamma] = GEDAI_subspace_mccann_prior(...
+                double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, ...
+                C_LF, reference_mode, lowcut_frequency, epoch_size_in_cycles, signal_type, ~silent_mode);
+        elseif is_option4_requested
             % Option 4: 2-Pass ENOVA < 10% Epoch Selection & 9 Band-Specific Covariance Blending
             if ~silent_mode
                 disp([newline 'Executing Option 4: Running anatomy-only baseline GEDAI...']);
@@ -1289,7 +1302,15 @@ tEnd = toc(tStart);
 if ~ischar(ref_matrix_type)
     ref_matrix_type = 'custom';
 end
-if isempty(output_reference_channel)
+if is_blended_requested
+    if isnumeric(prior_blend) && isscalar(prior_blend)
+        blend_com_str = num2str(prior_blend);
+    else
+        blend_com_str = ['''' char(prior_blend) ''''];
+    end
+    com = sprintf('EEG = GEDAI(EEG, %s, %s, %s, ''%s'', %d, %d, %s, %s, ''%s'', %s, ''%s'', ''prior_blend'', %s, ''prior_target_band'', ''%s'');', ...
+        threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel, blend_com_str, prior_target_band);
+elseif isempty(output_reference_channel)
     com = sprintf('EEG = GEDAI(EEG, %s, %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
         threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
 else

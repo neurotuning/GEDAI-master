@@ -79,6 +79,20 @@ if nargin < 8 || isempty(cosine_weights)
 end
 half_epoch = epoch_samples/2;
 
+% Precompute top-K leadfield dipolar projector P_K and alpha-band FFT bins
+% to protect dipolar physiological rhythms from high-frequency tail leakage.
+use_dipolar_gate = strcmpi(signal_type, 'eeg') && (epoch_samples >= round(0.45 * srate));
+if use_dipolar_gate
+    [V_lf, D_lf] = eig(refCOV_reg);
+    [~, ord_lf] = sort(real(diag(D_lf)), 'descend');
+    K_dip = min(6, max(2, floor(num_chans / 2)));
+    V_K = real(V_lf(:, ord_lf(1:K_dip)));
+    P_orth_K = eye(num_chans, 'like', refCOV_reg) - V_K * V_K';
+    freqs_fft = (0:(epoch_samples - 1)) * (srate / epoch_samples);
+    alpha_bins = (freqs_fft >= 7 & freqs_fft <= 14);
+    nyq_bins = (freqs_fft > 0 & freqs_fft <= (srate / 2));
+end
+
 for i = 1:num_epochs
     component_spatial_filter = Evec(:,:,i);
     
@@ -91,8 +105,25 @@ for i = 1:num_epochs
     component_spatial_filter(:, signal_indices) = 0;
     % --- OPTIMIZATION END ---
 
-    artifacts_timecourses = component_spatial_filter' * EEGdata_epoched(:,:,i);    
-    Signal_to_remove = refCOV_reg * (Evec(:,:,i) * artifacts_timecourses);
+    if use_dipolar_gate && any(~signal_indices)
+        bad_idx = find(~signal_indices);
+        Evec_bad = Evec(:, bad_idx, i);
+        A_bad = refCOV_reg * Evec_bad;
+        tc_bad = Evec_bad' * EEGdata_epoched(:,:,i);
+        F_bad = abs(fft(double(tc_bad), [], 2)).^2;
+        alpha_frac = sum(F_bad(:, alpha_bins), 2) ./ max(sum(F_bad(:, nyq_bins), 2), 1e-12);
+        for b = 1:numel(bad_idx)
+            a_b = A_bad(:, b);
+            lf_align = sum((V_K' * a_b).^2) / max(sum(a_b.^2), 1e-12);
+            if lf_align >= 0.65 && alpha_frac(b) >= 0.25
+                A_bad(:, b) = P_orth_K * a_b;
+            end
+        end
+        Signal_to_remove = A_bad * tc_bad;
+    else
+        artifacts_timecourses = component_spatial_filter' * EEGdata_epoched(:,:,i);    
+        Signal_to_remove = refCOV_reg * (Evec(:,:,i) * artifacts_timecourses);
+    end
     
     artifacts(:, :, i) = Signal_to_remove;
     cleaned_epoch = EEGdata_epoched(:,:,i) - Signal_to_remove;

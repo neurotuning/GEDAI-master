@@ -126,9 +126,11 @@ for epoch = 1:num_epochs
             NOISE_subspace_similarity_distribution(epoch) = 0;
         end
     else
-        % Subspace Volume Determinant (Optimal for EEG):
-        % Uses 3D volume overlap so multi-component broadband artifacts
-        % (EOG + EMG + NOISE) are thoroughly filtered without penalty accumulation.
+        % Subspace Volume Determinant + Rank-1 Dipolar Rhythm Guardrail (Optimal for EEG):
+        % Combines 3D volume overlap (for multi-component EOG + EMG + NOISE)
+        % with a rank-1 dipolar energy-fraction term sum(s.^6) so rank-1/rank-2
+        % physiological rhythms (e.g., high-power posterior alpha) are not
+        % invisible to the 3D determinant when num_bad < 3.
         if num_bad >= M
             % Fast associative path
             Evec_bad = Evec(:, bad_indices, epoch);
@@ -138,7 +140,11 @@ for epoch = 1:num_epochs
             T_noise = refCOV_reg * Q1_noise;
             Y2_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_noise)));
             [evecs_noise, ~] = qr(Y2_noise, 0);
-            NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
+            nsi_det = abs(det(evecs_noise' * Template_guess));
+            P_bad = refCOV_reg * Evec_bad;
+            [Q_bad, ~] = qr(P_bad, 0);
+            s_bad = svd(Q_bad' * Template_guess);
+            NOISE_subspace_similarity_distribution(epoch) = 0.88 * nsi_det + 0.12 * sum(s_bad.^6);
         elseif num_bad > 0
             % Fallback for rank-deficient noise
             Evec_bad = Evec(:, bad_indices, epoch);
@@ -155,7 +161,11 @@ for epoch = 1:num_epochs
             [Q1_noise, ~] = qr(Y1_noise, 0);
             Y2_noise = cov_noise * Q1_noise;
             [evecs_noise, ~] = qr(Y2_noise, 0);
-            NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
+            nsi_det = abs(det(evecs_noise' * Template_guess));
+            P_bad = refCOV_reg * Evec_bad;
+            [Q_bad, ~] = qr(P_bad, 0);
+            s_bad = svd(Q_bad' * Template_guess);
+            NOISE_subspace_similarity_distribution(epoch) = 0.88 * nsi_det + 0.12 * sum(s_bad.^6);
         else
             % No bad components
             evecs_noise = eye(num_chans, M);
