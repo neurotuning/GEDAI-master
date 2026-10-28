@@ -304,8 +304,8 @@ if ENOVA_threshold_per_channel < inf
 
         ref_matrix_type_p1 = ref_matrix_type;
         if ~ischar(ref_matrix_type_p1)
-            ref_matrix_type_p1(flat_channels, :) = [];
-            ref_matrix_type_p1(:, flat_channels) = [];
+            ref_matrix_type_p1(flat_channels, :, :) = [];
+            ref_matrix_type_p1(:, flat_channels, :) = [];
         end
     else
         ref_matrix_type_p1 = ref_matrix_type;
@@ -351,8 +351,8 @@ if ENOVA_threshold_per_channel < inf
         % Update reference matrix if it's a custom matrix
         if ~ischar(ref_matrix_type)
             ref_matrix_type_reduced = ref_matrix_type;
-            ref_matrix_type_reduced(channels_to_remove, :) = [];
-            ref_matrix_type_reduced(:, channels_to_remove) = [];
+            ref_matrix_type_reduced(channels_to_remove, :, :) = [];
+            ref_matrix_type_reduced(:, channels_to_remove, :) = [];
         else
             ref_matrix_type_reduced = ref_matrix_type;
         end
@@ -484,8 +484,15 @@ if ENOVA_threshold_per_channel < inf
             refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference);
             if is_blended_requested && strcmp(signal_type, 'eeg') && ~isempty(refCOV_full)
                 try
-                    C_EC_full = GEDAI_load_empirical_centroid(EEGavRef_for_vis.chanlocs, prior_target_band, reference_mode);
-                    refCOV_full = GEDAI_ewok_geodesic_blend(refCOV_full, C_EC_full, optimal_blend_gamma);
+                    if (ischar(prior_blend) || isstring(prior_blend)) && ...
+                            (contains(lower(char(prior_blend)), 'mccann') || contains(lower(char(prior_blend)), 'semiblind'))
+                        refCOV_full = GEDAI_subspace_mccann_prior(double(EEGavRef_for_vis.data), ...
+                            EEGavRef_for_vis.srate, EEGavRef_for_vis.chanlocs, refCOV_full, ...
+                            reference_mode, lowcut_frequency, epoch_size_in_cycles, signal_type, false);
+                    elseif isnumeric(prior_blend) || strcmpi(char(prior_blend), 'bayesopt')
+                        C_EC_full = GEDAI_load_empirical_centroid(EEGavRef_for_vis.chanlocs, prior_target_band, reference_mode);
+                        refCOV_full = GEDAI_ewok_geodesic_blend(refCOV_full, C_EC_full, optimal_blend_gamma);
+                    end
                 catch
                 end
             end
@@ -1132,7 +1139,12 @@ if parallelize
             catch ME
                 % If OOM or other memory error, try single precision
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, const_refCOV.Value, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                if ndims(const_refCOV.Value) == 3
+                    current_refCOV = const_refCOV.Value(:, :, min(f, size(const_refCOV.Value, 3)));
+                else
+                    current_refCOV = const_refCOV.Value;
+                end
+                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
 
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -1179,7 +1191,12 @@ if ~parallelize || ~success_parallel
 
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                if ndims(refCOV) == 3
+                    current_refCOV = refCOV(:, :, min(f, size(refCOV, 3)));
+                else
+                    current_refCOV = refCOV;
+                end
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -1205,8 +1222,13 @@ if ~parallelize || ~success_parallel
             wavelet_data_band = stateful_modwt_single_band(unfiltered_data_single, wavelet_type, actual_decomposition_level, f)';
             current_epoch_size = epoch_sizes_per_wavelet_band(f);
             current_minThreshold = band_min_thresholds(f);
+            if ndims(refCOV) == 3
+                current_refCOV = refCOV(:, :, min(f, size(refCOV, 3)));
+            else
+                current_refCOV = refCOV;
+            end
 
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             disp(['processing wavelet band (single) = ' num2str(f)])
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array

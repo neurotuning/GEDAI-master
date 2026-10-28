@@ -10,10 +10,21 @@ clear;
 clc;
 maxNumCompThreads(1);
 
-eeglab_dir = 'C:\Users\Ros\Documents\MATLAB\eeglab2025.0.0';
-plugin_dir = fullfile(eeglab_dir, 'plugins', 'GEDAI-master');
-analysis_dir = 'C:\Users\Ros\Documents\EEG data\BEAR\analysis code';
-data_dir = 'C:\Users\Ros\Documents\EEG data\BEAR\EMPIRICAL analysis';
+bench_file_dir = fileparts(mfilename('fullpath'));
+plugin_dir = fileparts(bench_file_dir);
+eeglab_dir = fileparts(fileparts(plugin_dir));
+if ~exist(fullfile(eeglab_dir, 'functions'), 'dir')
+    eeglab_dir = 'C:\Users\Ros\Documents\MATLAB\eeglab2025.0.0';
+    plugin_dir = fullfile(eeglab_dir, 'plugins', 'GEDAI-master');
+end
+
+if exist('E:\new 4GEDAI paper\EMPIRICAL analysis\EHRLICH 27 channel', 'dir')
+    data_dir = 'E:\new 4GEDAI paper\EMPIRICAL analysis\EHRLICH 27 channel';
+    analysis_dir = fullfile(plugin_dir, 'benchmarks');
+else
+    analysis_dir = 'C:\Users\Ros\Documents\EEG data\BEAR\analysis code';
+    data_dir = 'C:\Users\Ros\Documents\EEG data\BEAR\EMPIRICAL analysis';
+end
 clean_dir = fullfile(data_dir, 'CLEAN EEG');
 artifact_dir = fullfile(data_dir, 'ARTIFACTS');
 
@@ -25,6 +36,8 @@ assert(exist('GEDAI', 'file') == 2, 'GEDAI was not found.');
 assert(exist('GEDAI_subspace_mccann_prior', 'file') == 2, 'GEDAI_subspace_mccann_prior was not found.');
 
 clean_files = dir(fullfile(clean_dir, '*.set'));
+[~, clean_order] = sort({clean_files.name});
+clean_files = clean_files(clean_order);
 categories = {'EMG', 'EOG', 'NOISE', 'NOISE EOG EMG'};
 assert(numel(clean_files) == 10, 'Expected 10 clean BEAR recordings.');
 

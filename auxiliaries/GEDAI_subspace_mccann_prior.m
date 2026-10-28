@@ -18,9 +18,9 @@ function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance] = GEDAI
 % SENSAI score on 1-second 8-16 Hz calibration epochs (Guardrail A), and
 % constructs a Band-Selective 3D reference covariance tensor:
 %   - Outer wavelet bands (> 25 Hz EMG/gamma and < 1.56 Hz EOG/delta)
-%     retain the unperturbed anatomical leadfield prior C_LF_n.
+%     retain the montage-referenced anatomical leadfield anchor C0n.
 %   - Physiological mid-bands (1.56 - 25 Hz) use the anchor-regularized
-%     subspace McCann covariance (w * C_K(theta*) + (1 - w) * C_LF_n).
+%     subspace McCann covariance (w * C_K(theta*) + (1 - w) * C0n).
 %
 % Inputs:
 %   data                 - (nbchan x pnts) referenced EEG data (e.g. EEGavRef.data)
@@ -136,8 +136,8 @@ end
 bw_distance = compute_bures_distance(C0n, C_K);
 
 % 3. Construct Band-Selective 3D refCOV Tensor
-% Outer bands (> 25 Hz and < 1.56 Hz) retain C_LF_n;
-% Physiological mid-bands (1.56 - 25 Hz) use anchor-regularized C_K
+% Outer bands (> 25 Hz and < 1.56 Hz) retain the reference-matched anchor C0n;
+% Physiological mid-bands (1.56 - 25 Hz) use anchor-regularized C_K (w = 0.50).
 num_wavelet_bands = max(6, min(ceil(log2(srate / lowcut_frequency)), floor(log2(pnts))));
 lower_freqs = srate ./ (2.^(2:(num_wavelet_bands + 1)));
 upper_freqs = srate ./ (2.^(1:num_wavelet_bands));
@@ -145,29 +145,37 @@ center_freqs = (lower_freqs + upper_freqs) / 2;
 
 lowest_to_exclude = sum(upper_freqs <= lowcut_frequency);
 n_total_bands = max(8, num_wavelet_bands - lowest_to_exclude);
-refCOV_3D = repmat(C_LF_n, 1, 1, n_total_bands);
+refCOV_3D = repmat(C0n, 1, 1, n_total_bands);
 adapt_bands = find(center_freqs(1:n_total_bands) >= 1.5 & center_freqs(1:n_total_bands) <= 25.0);
 if isempty(adapt_bands)
     adapt_bands = intersect(3:6, 1:n_total_bands);
 end
 
-w_subspace = 0.66;
-C_mid = w_subspace * C_K + (1 - w_subspace) * C_LF_n;
+w_subspace = 0.50;
+C_mid = w_subspace * C_K + (1 - w_subspace) * C0n;
+C_mid = C_mid / max(trace(C_mid), 1e-12);
 
 for idx_b = 1:numel(adapt_bands)
     f = adapt_bands(idx_b);
     refCOV_3D(:, :, f) = C_mid;
 end
 
-% Restore original leadfield trace scale so log(Eval) + 100 thresholding in
-% SENSAI.m / clean_EEG.m is invariant across raw vs z-scored uV units.
+% Restore original leadfield trace scale and apply GEDAI's internal average-reference
+% operator R_np1 = I - 1/(N+1)*1*1' so native and custom refCOV_3D calls are identical.
 refCOV_3D = refCOV_3D * orig_trace;
+if strcmpi(reference_mode, 'AvgRef')
+    R_np1 = eye(N) - ones(N) / (N + 1);
+    for b = 1:size(refCOV_3D, 3)
+        refCOV_3D(:, :, b) = R_np1 * refCOV_3D(:, :, b) * R_np1';
+        refCOV_3D(:, :, b) = real((refCOV_3D(:, :, b) + refCOV_3D(:, :, b)') / 2);
+    end
+end
 
 if verbose
     fprintf('\n=== GEDAI: Generative Semi-Blind McCann Tuning (K = %d/%d modes) ===\n', K, N);
     fprintf('  Baseline 8-16 Hz SENSAI:    %+.2f %%\n', base_SENSAI);
     fprintf('  Tuned 8-16 Hz SENSAI:       %+.2f %% (BW dist = %.4f)\n', best_SENSAI, bw_distance);
-    fprintf('  Band-Selective 3D Prior:    Adapted bands [%s], Frozen outer bands\n', num2str(adapt_bands));
+    fprintf('  Band-Selective 3D Prior:    Adapted bands [%s], Frozen outer bands (C0n anchor, w = %.2f)\n', num2str(adapt_bands), w_subspace);
     fprintf('===================================================================\n');
 end
 
