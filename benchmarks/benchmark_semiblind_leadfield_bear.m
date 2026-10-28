@@ -182,8 +182,8 @@ parfor trial = 1:num_trials
 
     % 2. Evaluate reconstructions on the untouched final 30 seconds.
     raw_metric = score_reconstruction(clean_test, mixture_test);
-    out_27ch = denoise_with_custom_avgref(chanlocs, srate, mixture_test, C0n);
-    out_precomp = denoise_with_precomputed(chanlocs, srate, mixture_test);
+    out_27ch = denoise_with_precomputed(chanlocs, srate, mixture_test);
+    out_precomp = denoise_with_custom_avgref(chanlocs, srate, mixture_test, C_LF);
     out_tuned = denoise_with_3d_refcov(chanlocs, srate, mixture_test, refCOV_3D, R_np1);
 
     m_27ch = score_reconstruction(clean_test, out_27ch);

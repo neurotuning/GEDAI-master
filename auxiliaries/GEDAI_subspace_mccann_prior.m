@@ -61,10 +61,9 @@ else
     cal_data = [data(:, idx1), data(:, idx2), data(:, idx3)];
 end
 
-% Unit-trace theoretical leadfield prior (preserving original trace scale)
+% Unit-trace theoretical leadfield prior
 C_LF = real((C_LF + C_LF') / 2);
-orig_trace = max(trace(C_LF), 1e-12);
-C_LF_n = C_LF / orig_trace;
+C_LF_n = C_LF / max(trace(C_LF), 1e-12);
 
 % Construct reference-matched anchor C0n and harmonic eigenbasis V0
 if strcmpi(reference_mode, 'AvgRef')
@@ -160,9 +159,8 @@ for idx_b = 1:numel(adapt_bands)
     refCOV_3D(:, :, f) = C_mid;
 end
 
-% Restore original leadfield trace scale and apply GEDAI's internal average-reference
-% operator R_np1 = I - 1/(N+1)*1*1' so native and custom refCOV_3D calls are identical.
-refCOV_3D = refCOV_3D * orig_trace;
+% Apply GEDAI's internal average-reference operator R_np1 = I - 1/(N+1)*1*1'
+% on the unit-trace band matrices so native ('AvgRef') and custom ('None') calls match.
 if strcmpi(reference_mode, 'AvgRef')
     R_np1 = eye(N) - ones(N) / (N + 1);
     for b = 1:size(refCOV_3D, 3)

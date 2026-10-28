@@ -1940,13 +1940,21 @@ switch lower(char(ref_matrix_type))
         if strcmpi(internal_reference, 'AvgRef')
             G_343_av = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
             G_full = G_343_av(idx, :);
-            refCOV = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
+            C_343 = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
+            C_343 = real((C_343 + C_343') / 2);
+            C_343_n = C_343 / max(trace(C_343), 1e-12);
+            n_ch = length(idx);
+            R_n = eye(n_ch) - ones(n_ch) / n_ch;
+            C0n = (R_n * C_343_n * R_n') / max(trace(R_n * C_343_n * R_n'), 1e-12);
+            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+            refCOV = spec.R * C0n * spec.R';
             refCOV = real((refCOV + refCOV') / 2);
             return;
         elseif strcmpi(internal_reference, 'REST')
             G_full = L.leadfield4GEDAI.Gain(idx, :);
             refCOV = L.leadfield4GEDAI.gram_matrix(idx, idx);
             refCOV = real((refCOV + refCOV') / 2);
+            refCOV = refCOV / max(trace(refCOV), 1e-12);
             return;
         else
             G_raw = L.leadfield4GEDAI.Gain(idx, :);
@@ -1960,6 +1968,15 @@ switch lower(char(ref_matrix_type))
             lf.data = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
             tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
             G_full=tmp.data;
+            C_interp = real((G_full*G_full'+(G_full*G_full')')/2);
+            R_n = eye(n) - ones(n) / n;
+            C0n = R_n * C_interp * R_n';
+            C0n = real((C0n + C0n') / 2);
+            C0n = C0n / max(trace(C0n), 1e-12);
+            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+            refCOV = spec.R * C0n * spec.R';
+            refCOV = real((refCOV + refCOV') / 2);
+            return;
         else
             lf.data = L.leadfield4GEDAI.Gain;
             tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
@@ -1997,6 +2014,7 @@ switch lower(char(ref_matrix_type))
         error('GEDAI:UnknownReferenceMatrixType','Unknown ref_matrix_type: %s',char(ref_matrix_type));
 end
 refCOV=real((G_full*G_full'+(G_full*G_full')')/2);
+refCOV=refCOV/max(trace(refCOV),1e-12);
 end
 
 function chanlocs = sanitize_and_fill_chanlocs(chanlocs)
