@@ -276,27 +276,21 @@ if ~isinf(smoothing_window_seconds)
         all_diagonals = Eval_chunk(all_indices(:));
         magnitudes = abs(all_diagonals);
         all_evals_chunk = reshape(magnitudes, N_EEG_electrodes, c_len);
-        evals_sorted_chunk = sort(all_evals_chunk, 1, 'ascend');
-        if N_EEG_electrodes > 1
-            active_evals_chunk = evals_sorted_chunk(2:end, :);
-        else
-            active_evals_chunk = evals_sorted_chunk;
+        log_Eig_val_chunk = log(magnitudes(magnitudes > 0)) + 100;
+        
+        correction_factor = 1.00;
+        T1 = correction_factor * (105 - mean_thresh) / 100;
+        if strcmpi(signal_type, 'eeg')
+            percentile_threshold = 98;
+        elseif strcmpi(signal_type, 'meg')
+            percentile_threshold = 99;
         end
-        pos_evals_chunk = active_evals_chunk(active_evals_chunk > 0);
-        if ~isempty(pos_evals_chunk)
-            y_log_c = log(pos_evals_chunk);
-            mu0_c = median(y_log_c);
-            left_dev_c = mu0_c - y_log_c(y_log_c <= mu0_c);
-            sig0_c = 0.5 * (1.4826 * median(left_dev_c) + sqrt(mean(left_dev_c.^2)));
-            right_dev_c = y_log_c(y_log_c >= mu0_c) - mu0_c;
-            sig_tail4_c = (mean(right_dev_c.^4))^(1/4);
-            y_anchor_c = mu0_c + 2.50 * sig0_c + 0.85 * (sig_tail4_c - sig0_c);
-            scale_step_c = (y_anchor_c - (mu0_c + 0.25 * sig0_c)) / 7.0;
-            base_log_cut_c = y_anchor_c + 5.0 * scale_step_c;
-            threshold_val = exp(base_log_cut_c - mean_thresh * scale_step_c);
+        if ~isempty(log_Eig_val_chunk)
+            Treshold_chunk = T1 * prctile(log_Eig_val_chunk, percentile_threshold);
         else
-            threshold_val = inf;
+            Treshold_chunk = 0;
         end
+        threshold_val = exp(Treshold_chunk - 100);
         
         T_proj = refCOV_reg * Template_guess;
         M_proj = size(Template_guess, 2);

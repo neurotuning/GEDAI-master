@@ -33,36 +33,33 @@ for i = 1:num_epochs
 end
 % Use the magnitude (a real value) for all subsequent calculations.
 magnitudes = abs(all_diagonals);
-all_evals_mat = reshape(magnitudes, num_chans, num_epochs);
+log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
+
+
+%% Artifacting multiplication factor T1
+correction_factor = 1.00;
 
 if isscalar(artifact_threshold_in)
     artifact_threshold_in = repmat(artifact_threshold_in, 1, num_epochs);
 end
 
-%% Parameter-free Left-Half Gaussian Mirror + Right-Tail Kurtosis cutoff (OptA)
-evals_sorted = sort(all_evals_mat, 1, 'ascend');
-if num_chans > 1
-    active_evals = evals_sorted(2:end, :);
-else
-    active_evals = evals_sorted;
-end
-pos_evals = active_evals(active_evals > 0);
-if ~isempty(pos_evals)
-    y_log = log(pos_evals);
-    mu0 = median(y_log);
-    left_dev = mu0 - y_log(y_log <= mu0);
-    sig_mad = 1.4826 * median(left_dev);
-    sig_rms = sqrt(mean(left_dev.^2));
-    sig0 = 0.5 * (sig_mad + sig_rms);
-    right_dev = y_log(y_log >= mu0) - mu0;
-    sig_tail4 = (mean(right_dev.^4))^(1/4);
-    y_anchor = mu0 + 2.50 * sig0 + 0.85 * (sig_tail4 - sig0);
-    scale_step = (y_anchor - (mu0 + 0.25 * sig0)) / 7.0;
-    base_log_cut = y_anchor + 5.0 * scale_step;
-    Treshold1_array = base_log_cut - artifact_threshold_in * scale_step + 100;
-else
-    Treshold1_array = inf(1, num_epochs);
-end
+T1_array = correction_factor * (105 - artifact_threshold_in) / 100;
+
+%% Defining artifact threshold
+
+    if strcmpi(signal_type, 'eeg')
+       percentile_threshold = 98;
+      
+    elseif strcmpi(signal_type, 'meg')
+           percentile_threshold = 99;
+    end
+
+% Compute Treshold1 per epoch to match exactly how clean_SENSAI evaluates it:
+% SENSAI uses the GLOBAL percentile of ALL eigenvalues in the window it was
+% optimized on. We replicate that here by computing one percentile over ALL
+% eigenvalues (all channels × all epochs) and scaling per-epoch by T1_array.
+global_log_prctile = prctile(log_Eig_val_all, percentile_threshold);
+Treshold1_array = T1_array * global_log_prctile;
 
 
 %% Compute Regularized Reference Covariance for fast linear system bypass
