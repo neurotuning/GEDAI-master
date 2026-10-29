@@ -23,7 +23,7 @@
 %                                 expense of signal, while milder threshold
 %                                 ("auto-") might retain more signal at the
 %                                 expense of noise. Possible levels:
-%                                 "auto-", "auto" or "auto+".
+%                                 "auto-", "auto", "auto+" or "optimize".
 %                                 Default is "auto".
 %
 %   epoch_size_in_cycles        - Epoch size in number of wave cycles for each
@@ -149,7 +149,7 @@ precomputed_ENOVA_per_epoch = [];
 output_reference_channel = '';
 prior_blend = 'off';
 prior_target_band = 'Alpha';
-bayesopt_evals = 15;
+bayesopt_evals = 12;
 com = '';
 
 if ~isempty(varargin)
@@ -489,7 +489,7 @@ if ENOVA_threshold_per_channel < inf
                         refCOV_full = GEDAI_subspace_mccann_prior(double(EEGavRef_for_vis.data), ...
                             EEGavRef_for_vis.srate, EEGavRef_for_vis.chanlocs, refCOV_full, ...
                             reference_mode, lowcut_frequency, epoch_size_in_cycles, signal_type, false);
-                    elseif isnumeric(prior_blend) || strcmpi(char(prior_blend), 'bayesopt')
+                    elseif isnumeric(prior_blend) || strcmpi(char(prior_blend), 'optimize')
                         C_EC_full = GEDAI_load_empirical_centroid(EEGavRef_for_vis.chanlocs, prior_target_band, reference_mode);
                         refCOV_full = GEDAI_ewok_geodesic_blend(refCOV_full, C_EC_full, optimal_blend_gamma);
                     end
@@ -805,16 +805,16 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
                 disp([newline sprintf('Refined reference covariance using 2-pass linear blend (alpha = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
             end
             
-        elseif (ischar(prior_blend) || isstring(prior_blend)) && strcmpi(char(prior_blend), 'bayesopt')
+        elseif (ischar(prior_blend) || isstring(prior_blend)) && strcmpi(char(prior_blend), 'optimize')
             % Load empirical EC centroid matched to current montage
             C_EC = GEDAI_load_empirical_centroid(EEGavRef.chanlocs, prior_target_band, reference_mode);
             if ~silent_mode
-                disp([newline 'Optimizing prior blending via Bayesian optimization (maximizing SENSAI)...']);
+                disp([newline 'Optimizing prior blending via fminbnd (maximizing SENSAI)...']);
             end
             [optimal_blend_gamma, best_sensai_val, refCOV] = GEDAI_bayesopt_prior(...
                 double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, ...
                 C_LF, C_EC, bayesopt_evals, ~silent_mode, visualize_artifacts, ...
-                artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel);
+                artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel, parallelize);
         else
             % Load empirical EC centroid matched to current montage
             C_EC = GEDAI_load_empirical_centroid(EEGavRef.chanlocs, prior_target_band, reference_mode);
@@ -831,19 +831,19 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
     end
 end
 
-%% Bayesian Optimization of Artifacting Strength (range [0, 10])
+%% Outer Optimization of Artifacting Strength (range [0, 10])
 optimal_artifact_strength = NaN;
-if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && strcmpi(char(artifact_threshold_type), 'bayesopt')
+if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && strcmpi(char(artifact_threshold_type), 'optimize')
     try
         if ~silent_mode
-            disp([newline 'Optimizing artifacting strength via Bayesian optimization (maximizing SENSAI)...']);
+            disp([newline 'Optimizing artifacting strength via fminbnd (maximizing SENSAI)...']);
         end
         [optimal_artifact_strength, best_strength_sensai] = GEDAI_bayesopt_strength(...
             double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, ...
             refCOV, bayesopt_evals, ~silent_mode, visualize_artifacts, ...
-            signal_type, epoch_size_in_cycles, lowcut_frequency);
+            signal_type, epoch_size_in_cycles, lowcut_frequency, parallelize);
         artifact_threshold_type = optimal_artifact_strength;
-        threshold_label = sprintf('bayesopt (%.2f)', optimal_artifact_strength);
+        threshold_label = sprintf('optimize (%.2f)', optimal_artifact_strength);
     catch strength_err
         warning('GEDAI:StrengthBayesOptFailed', 'Artifacting strength optimization failed: %s. Continuing with ''auto''.', strength_err.message);
         artifact_threshold_type = 'auto';
