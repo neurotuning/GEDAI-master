@@ -80,7 +80,7 @@ str_strength = [pad_center('auto') '|' ...
                 pad_center('auto+') '|' ...
                 pad_center('auto-') '|' ...
                 pad_center('optimize')];
-str_leadfield = [pad_center('precomputed') '|' pad_center('interpolated') '|' pad_center('warped')];
+str_leadfield = [pad_center('precomputed') '|' pad_center('interpolated') '|' pad_center('projection') '|' pad_center('warped')];
 
 str_prior_blend = [pad_center('off (leadfield only)') '|' ...
                    pad_center('Subspace McCann (Band-Selective 3D)') '|' ...
@@ -125,7 +125,7 @@ if isempty(out), return; end
 threshold_cell = {'auto', 'auto+', 'auto-', 'optimize'};
 artifact_threshold = threshold_cell{userInput{1}};
 
-ref_matrix_cell = {'precomputed', 'interpolated', 'warped'};
+ref_matrix_cell = {'precomputed', 'interpolated', 'projection', 'warped'};
 ref_matrix_type = ref_matrix_cell{userInput{2}};
 
 % Parse Prior Geodesic Blending selection

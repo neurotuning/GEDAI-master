@@ -41,6 +41,10 @@
 %                                 "interpolated" uses the precomputed leadfield and
 %                                 interpolates it to non-standard electrode locations.
 %
+%                                 "projection" projects the precomputed 343-channel
+%                                 OpenMEEG BEM leadfield onto current electrode locations
+%                                 via cortical source-space dipole kernel regression.
+%
 %                                 "warped" uses an EEGLAB/Fieldtrip BEM surface source model
 %                                 (Colin27) warped to the current electrode locations.
 %
@@ -1986,6 +1990,26 @@ switch lower(char(ref_matrix_type))
             tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
             G_full=GEDAI_apply_leadfield_reference(tmp.data,EEGavRef.chanlocs,internal_reference);
         end
+    case {'projection', 'projected'}
+        n=length(EEGavRef.chanlocs);
+        target_locs = sanitize_and_fill_chanlocs(EEGavRef.chanlocs);
+        if length([target_locs.X])~=n || length([target_locs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
+        L=GEDAI_load_template_leadfield();
+        if strcmpi(internal_reference, 'AvgRef')
+            G_full = GEDAI_project_leadfield_dipole(L, target_locs, true);
+            C_proj = real((G_full*G_full'+(G_full*G_full')')/2);
+            R_n = eye(n) - ones(n) / n;
+            C0n = R_n * C_proj * R_n';
+            C0n = real((C0n + C0n') / 2);
+            C0n = C0n / max(trace(C0n), 1e-12);
+            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+            refCOV = spec.R * C0n * spec.R';
+            refCOV = real((refCOV + refCOV') / 2);
+            return;
+        else
+            G_raw = GEDAI_project_leadfield_dipole(L, target_locs, false);
+            G_full = GEDAI_apply_leadfield_reference(G_raw, EEGavRef.chanlocs, internal_reference);
+        end
     case 'warped'
         n=length(EEGavRef.chanlocs);
         if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
@@ -2184,4 +2208,102 @@ if isfield(L_data, 'leadfield4GEDAI') && isfield(L_data.leadfield4GEDAI, 'electr
         end
     end
 end
+end
+
+function G_proj = GEDAI_project_leadfield_dipole(L, chanlocs, use_avgref)
+% Projects the 343-channel OpenMEEG BEM leadfield onto target chanlocs via
+% canonical 10-20 head-frame alignment and multi-eccentricity Berg (1994)
+% cortical source-space dipole kernel regression.
+persistent proj_cache
+if isempty(proj_cache)
+    lf_343 = L.leadfield4GEDAI.EEG;
+    G_343_raw = double(L.leadfield4GEDAI.Gain); % [343 x 3630]
+    G_343_av  = G_343_raw - mean(G_343_raw, 1);
+    GridLoc   = double(L.leadfield4GEDAI.GridLoc); % [1210 x 3] in meters
+    Loc_343   = reshape([L.leadfield4GEDAI.electrodes.Loc], 3, 343)'; % [343 x 3] in meters
+
+    labels_343 = {lf_343.chanlocs.labels};
+    i_fpz = find(strcmpi(labels_343, 'Fpz'), 1);
+    i_oz  = find(strcmpi(labels_343, 'Oz'), 1);
+    i_t7  = find(strcmpi(labels_343, 'T7'), 1);
+    i_t8  = find(strcmpi(labels_343, 'T8'), 1);
+    i_cz  = find(strcmpi(labels_343, 'Cz'), 1);
+
+    A_loc = [2 * Loc_343, ones(343, 1)];
+    sol_loc = A_loc \ sum(Loc_343.^2, 2);
+    c_loc = sol_loc(1:3)';
+
+    vx = Loc_343(i_fpz, :) - Loc_343(i_oz, :); ex = vx / norm(vx);
+    vy = Loc_343(i_t7, :)  - Loc_343(i_t8, :); ey = vy - dot(vy, ex) * ex; ey = ey / norm(ey);
+    ez = cross(ex, ey);
+    if dot(Loc_343(i_cz, :) - c_loc, ez) < 0, ez = -ez; end
+    R_canon_to_343 = [ex; ey; ez];
+
+    u_343_sph = (Loc_343 - c_loc) * R_canon_to_343';
+    u_343_sph = u_343_sph ./ max(vecnorm(u_343_sph, 2, 2), 1e-12);
+    r_343_norm = vecnorm(Loc_343 - c_loc, 2, 2);
+
+    Grid_1 = c_loc + 0.65 * (GridLoc - c_loc);
+    Grid_2 = c_loc + 0.90 * (GridLoc - c_loc);
+    K_343_raw = [GEDAI_dipole_kernel_matrix(Loc_343, Grid_1), GEDAI_dipole_kernel_matrix(Loc_343, Grid_2)];
+    K_343_av  = K_343_raw - mean(K_343_raw, 1);
+
+    lambda = 1e-4;
+    Gram_av = K_343_av * K_343_av';
+    reg_av  = lambda * (trace(Gram_av) / size(Gram_av, 1));
+    B_av    = (Gram_av + reg_av * eye(size(Gram_av, 1))) \ G_343_av;
+
+    Gram_raw = K_343_raw * K_343_raw';
+    reg_raw  = lambda * (trace(Gram_raw) / size(Gram_raw, 1));
+    B_raw    = (Gram_raw + reg_raw * eye(size(Gram_raw, 1))) \ G_343_raw;
+
+    proj_cache = struct( ...
+        'c_loc', c_loc, ...
+        'R_canon_to_343', R_canon_to_343, ...
+        'u_343_sph', u_343_sph, ...
+        'r_343_norm', r_343_norm, ...
+        'Grid_1', Grid_1, ...
+        'Grid_2', Grid_2, ...
+        'K_343_av', K_343_av, ...
+        'K_343_raw', K_343_raw, ...
+        'B_av', B_av, ...
+        'B_raw', B_raw);
+end
+
+X = [chanlocs.X]'; Y = [chanlocs.Y]'; Z = [chanlocs.Z]';
+xyz = [X, Y, Z];
+u_target = xyz ./ max(vecnorm(xyz, 2, 2), 1e-12);
+
+cos_ang = max(-1, min(1, u_target * proj_cache.u_343_sph'));
+ang = acos(cos_ang);
+w_rad = exp(-(ang / 0.12).^2);
+w_rad = w_rad ./ max(sum(w_rad, 2), 1e-12);
+r_target_norm = w_rad * proj_cache.r_343_norm;
+dir_343_space = u_target * proj_cache.R_canon_to_343;
+Loc_target = proj_cache.c_loc + dir_343_space .* r_target_norm;
+
+K_target = [GEDAI_dipole_kernel_matrix(Loc_target, proj_cache.Grid_1), ...
+            GEDAI_dipole_kernel_matrix(Loc_target, proj_cache.Grid_2)];
+
+if use_avgref
+    W = K_target * proj_cache.K_343_av';
+    G_proj = W * proj_cache.B_av;
+else
+    W = K_target * proj_cache.K_343_raw';
+    G_proj = W * proj_cache.B_raw;
+end
+end
+
+function K = GEDAI_dipole_kernel_matrix(SensLoc, DipLoc)
+N_s = size(SensLoc, 1);
+N_d = size(DipLoc, 1);
+dx = SensLoc(:, 1) - DipLoc(:, 1)';
+dy = SensLoc(:, 2) - DipLoc(:, 2)';
+dz = SensLoc(:, 3) - DipLoc(:, 3)';
+dist2 = dx.^2 + dy.^2 + dz.^2;
+dist3 = (max(dist2, 0.015^2)).^(1.5);
+K = zeros(N_s, 3 * N_d);
+K(:, 1:3:end) = dx ./ dist3;
+K(:, 2:3:end) = dy ./ dist3;
+K(:, 3:3:end) = dz ./ dist3;
 end
