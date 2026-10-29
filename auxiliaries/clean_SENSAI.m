@@ -43,21 +43,29 @@ all_diagonals = Eval(all_indices(:));
 % Use the magnitude (a real value) for all subsequent calculations.
 magnitudes = abs(all_diagonals);
 all_evals_mat = reshape(magnitudes, num_chans, num_epochs);
-log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
 
-
-    %% Artifacting multiplication factor T1
-    correction_factor = 1.00;
-T1 = correction_factor * (105 - artifact_threshold_in) / 100;
-
-%% Defining artifact threshold
-    if strcmpi(signal_type, 'eeg')
-       percentile_threshold = 98;
-      
-    elseif strcmpi(signal_type, 'meg')
-           percentile_threshold = 99;
-    end
-Treshold1 = T1 * prctile(log_Eig_val_all, percentile_threshold);
+%% Parameter-free Left-Half Gaussian Mirror + Right-Tail Kurtosis cutoff (OptA)
+evals_sorted = sort(all_evals_mat, 1, 'ascend');
+if num_chans > 1
+    active_evals = evals_sorted(2:end, :);
+else
+    active_evals = evals_sorted;
+end
+pos_evals = active_evals(active_evals > 0);
+if ~isempty(pos_evals)
+    y_log = log(pos_evals);
+    mu0 = median(y_log);
+    left_dev = mu0 - y_log(y_log <= mu0);
+    sig0 = 0.5 * (1.4826 * median(left_dev) + sqrt(mean(left_dev.^2)));
+    right_dev = y_log(y_log >= mu0) - mu0;
+    sig_tail4 = (mean(right_dev.^4))^(1/4);
+    y_anchor = mu0 + 2.50 * sig0 + 0.85 * (sig_tail4 - sig0);
+    scale_step = (y_anchor - (mu0 + 0.25 * sig0)) / 7.0;
+    base_log_cut = y_anchor + 5.0 * scale_step;
+    Treshold1 = base_log_cut - artifact_threshold_in * scale_step + 100;
+else
+    Treshold1 = inf;
+end
 
 
 %% Compute Regularized Reference Covariance

@@ -1,8 +1,8 @@
 function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance] = GEDAI_subspace_mccann_prior(...
     data, srate, ~, C_LF, reference_mode, lowcut_frequency, ~, signal_type, verbose)
 % GEDAI_SUBSPACE_MCCANN_PRIOR - Generative Semi-Blind Subspace McCann
-% leadfield tuning for GEDAI (maximizing mid-band SENSAI without empirical
-% covariance estimation).
+% leadfield tuning for GEDAI with Quiet-Epoch Screening, Lie-Algebra
+% Tangent Consensus, and Gain-Adaptive Band-Selective 3D Prior.
 %
 % Perturbs the theoretical leadfield prior strictly within the span of the
 % top K = 6 smooth cortical harmonic modes V_K via a low-rank McCann
@@ -14,13 +14,22 @@ function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance] = GEDAI
 % 1..3 and 4..6), while the bottom N - K high-spatial-frequency modes are
 % strictly frozen.
 %
-% Evaluates candidate leadfield perturbations purely by maximizing the
-% SENSAI score on 1-second 8-16 Hz calibration epochs (Guardrail A), and
-% constructs a Band-Selective 3D reference covariance tensor:
-%   - Outer wavelet bands (> 25 Hz EMG/gamma and < 1.56 Hz EOG/delta)
-%     retain the montage-referenced anatomical leadfield anchor C0n.
-%   - Physiological mid-bands (1.56 - 25 Hz) use the anchor-regularized
-%     subspace McCann covariance (w * C_K(theta*) + (1 - w) * C0n).
+% Key Blind Tuning Mechanisms:
+%   1. Quiet-Epoch Screening & Active-Threshold Guardrail:
+%      Screens out the top 25% highest broadband-power burst epochs before
+%      evaluating 8-16 Hz calibration SENSAI (with minThreshold >= 0 so
+%      candidates cannot win via negative-threshold no-cleaning degeneracy).
+%   2. Lie-Algebra Hybrid Tangent Consensus:
+%      Combines the top candidate theta_argmax with the norm-matched
+%      quadratic-gain-weighted consensus of the top M = 8 tangent vectors
+%      in H_K(theta) before applying expm(H_K), suppressing single-candidate
+%      step-function noise.
+%   3. Gain-Adaptive Band-Selective 3D refCOV Tensor:
+%      Scales the physiological mid-band blending weight w_adapt in [0.25, 0.55]
+%      proportionally to the calibration SENSAI gain, adapts physiological
+%      mid-bands (1.5 - 25 Hz) with w_adapt, applies a graded low-delta
+%      weight (0.35 * w_adapt) to Band 7 (~1 - 2 Hz), and freezes outer
+%      bands at the unit-trace montage-projected anchor C0n.
 %
 % Inputs:
 %   data                 - (nbchan x pnts) referenced EEG data (e.g. EEGavRef.data)
@@ -35,9 +44,9 @@ function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance] = GEDAI
 %
 % Outputs:
 %   refCOV_3D   - (nbchan x nbchan x num_bands) band-selective reference covariance tensor
-%   best_params - Selected 1x9 tangent parameter vector theta*
-%   best_SENSAI - Maximal 8-16 Hz SENSAI score (%)
-%   base_SENSAI - Baseline leadfield 8-16 Hz SENSAI score (%)
+%   best_params - Selected 1x9 hybrid tangent parameter vector theta*
+%   best_SENSAI - Maximal 8-16 Hz SENSAI score (%) on screened calibration epochs
+%   base_SENSAI - Baseline leadfield 8-16 Hz SENSAI score (%) on screened calibration epochs
 %   bw_distance - Bures-Wasserstein distance between C0n and C_K(theta*)
 
 if nargin < 5 || isempty(reference_mode), reference_mode = 'AvgRef'; end
@@ -83,20 +92,33 @@ K = min(6, max(2, floor(N / 2)));
 V_K = V0(:, 1:K);
 Lambda_K = diag(lambda0(1:K));
 
-% 1. Extract 8-16 Hz physiological mid-band calibration epochs (Guardrail A)
+% 1. Extract 8-16 Hz physiological mid-band calibration epochs & screen burst epochs
 [fb, fa] = butter(4, [8, min(16, 0.45 * srate)] / (srate / 2), 'bandpass');
 alpha_cal = filtfilt(fb, fa, cal_data_proj')';
 
 epoch_len = round(srate);
 n_epochs = floor(size(alpha_cal, 2) / epoch_len);
 best_params = zeros(1, 9);
+w_adapt = 0.50;
 
 if n_epochs >= 2 && K >= 6
     epoched = reshape(double(alpha_cal(:, 1:(n_epochs * epoch_len))), N, epoch_len, n_epochs);
+    epoched_bb = reshape(double(cal_data_proj(:, 1:(n_epochs * epoch_len))), N, epoch_len, n_epochs);
     COV_tr = zeros(N, N, n_epochs);
+    bb_power = zeros(1, n_epochs);
     for e = 1:n_epochs
         cv = cov(epoched(:, :, e)');
         COV_tr(:, :, e) = (cv + cv') / 2;
+        bb_power(e) = trace(cov(epoched_bb(:, :, e)'));
+    end
+
+    % Quiet-epoch screening: discard top 25% highest broadband artifact burst epochs
+    cutoff_bb = prctile(bb_power, 75);
+    keep_mask = bb_power <= cutoff_bb;
+    if sum(keep_mask) >= 6
+        COV_cal = COV_tr(:, :, keep_mask);
+    else
+        COV_cal = COV_tr;
     end
 
     % 2. Deterministic Trust-Region Design in K=6 Tangent Space (L_max = 0.22)
@@ -109,34 +131,46 @@ if n_epochs >= 2 && K >= 6
 
     num_cands = size(P_cand, 1);
     scores = zeros(num_cands, 1);
-    C_cands = cell(num_cands, 1);
 
     for p_idx = 1:num_cands
         C_c = make_subspace_candidate(C0n, V_K, Lambda_K, P_cand(p_idx, :));
-        C_cands{p_idx} = C_c;
-        scores(p_idx) = eval_midband_sensai(C_c, COV_tr, signal_type);
+        scores(p_idx) = eval_midband_sensai(C_c, COV_cal, signal_type);
     end
 
     base_SENSAI = scores(1);
-    [best_SENSAI, best_idx] = max(scores);
-    if best_SENSAI > base_SENSAI
-        C_K = C_cands{best_idx};
-        best_params = P_cand(best_idx, :);
+    gains = max(0, scores - base_SENSAI);
+    [sorted_gains, ord_g] = sort(gains, 'descend');
+    best_SENSAI = base_SENSAI + sorted_gains(1);
+
+    if sorted_gains(1) > 0
+        % Lie-Algebra Hybrid Tangent Consensus (50% Argmax + 50% Top-8 Norm-Matched Consensus)
+        M8 = min(8, num_cands);
+        w8 = sorted_gains(1:M8).^2;
+        w8 = w8 / max(sum(w8), 1e-12);
+        th_8 = sum(P_cand(ord_g(1:M8), :) .* w8, 1);
+        target_norm = mean(vecnorm(P_cand(ord_g(1:3), :), 2, 2));
+        if norm(th_8) > 1e-6
+            th_8 = th_8 * (target_norm / norm(th_8));
+        end
+        th_arg = P_cand(ord_g(1), :);
+        best_params = 0.5 * th_arg + 0.5 * th_8;
+        C_K = make_subspace_candidate(C0n, V_K, Lambda_K, best_params);
+        w_adapt = min(0.55, max(0.25, 0.50 * (sorted_gains(1) / 5.0)));
     else
         best_SENSAI = base_SENSAI;
         C_K = C0n;
+        w_adapt = 0;
     end
 else
     base_SENSAI = NaN;
     best_SENSAI = NaN;
     C_K = C0n;
+    w_adapt = 0;
 end
 
 bw_distance = compute_bures_distance(C0n, C_K);
 
-% 3. Construct Band-Selective 3D refCOV Tensor
-% Outer bands (> 25 Hz and < 1.56 Hz) retain the reference-matched anchor C0n;
-% Physiological mid-bands (1.56 - 25 Hz) use anchor-regularized C_K (w = 0.50).
+% 3. Construct Gain-Adaptive Band-Selective 3D refCOV Tensor
 num_wavelet_bands = max(6, min(ceil(log2(srate / lowcut_frequency)), floor(log2(pnts))));
 lower_freqs = srate ./ (2.^(2:(num_wavelet_bands + 1)));
 upper_freqs = srate ./ (2.^(1:num_wavelet_bands));
@@ -150,13 +184,22 @@ if isempty(adapt_bands)
     adapt_bands = intersect(3:6, 1:n_total_bands);
 end
 
-w_subspace = 0.50;
-C_mid = w_subspace * C_K + (1 - w_subspace) * C0n;
-C_mid = C_mid / max(trace(C_mid), 1e-12);
+if w_adapt > 0
+    C_mid = w_adapt * C_K + (1 - w_adapt) * C0n;
+    C_mid = C_mid / max(trace(C_mid), 1e-12);
+    for idx_b = 1:numel(adapt_bands)
+        f = adapt_bands(idx_b);
+        refCOV_3D(:, :, f) = C_mid;
+    end
 
-for idx_b = 1:numel(adapt_bands)
-    f = adapt_bands(idx_b);
-    refCOV_3D(:, :, f) = C_mid;
+    % Graded low-delta adaptation in Band 7 (~0.98 - 1.95 Hz)
+    low_delta_band = max(adapt_bands) + 1;
+    if low_delta_band <= n_total_bands
+        w_low = 0.35 * w_adapt;
+        C_low = w_low * C_K + (1 - w_low) * C0n;
+        C_low = C_low / max(trace(C_low), 1e-12);
+        refCOV_3D(:, :, low_delta_band) = C_low;
+    end
 end
 
 % Apply GEDAI's internal average-reference operator R_np1 = I - 1/(N+1)*1*1'
@@ -172,8 +215,8 @@ end
 if verbose
     fprintf('\n=== GEDAI: Generative Semi-Blind McCann Tuning (K = %d/%d modes) ===\n', K, N);
     fprintf('  Baseline 8-16 Hz SENSAI:    %+.2f %%\n', base_SENSAI);
-    fprintf('  Tuned 8-16 Hz SENSAI:       %+.2f %% (BW dist = %.4f)\n', best_SENSAI, bw_distance);
-    fprintf('  Band-Selective 3D Prior:    Adapted bands [%s], Frozen outer bands (C0n anchor, w = %.2f)\n', num2str(adapt_bands), w_subspace);
+    fprintf('  Tuned 8-16 Hz SENSAI:       %+.2f %% (BW dist = %.4f, w_adapt = %.2f)\n', best_SENSAI, bw_distance, w_adapt);
+    fprintf('  Band-Selective 3D Prior:    Adapted bands [%s] + graded low-delta, Frozen outer bands (C0n anchor)\n', num2str(adapt_bands));
     fprintf('===================================================================\n');
 end
 
@@ -214,7 +257,8 @@ Eval = zeros(N, N, n_epochs);
 for e = 1:n_epochs
     [Evec(:, :, e), Eval(:, :, e)] = eig(COV(:, :, e), refCOV_reg, 'chol');
 end
-[~, score] = SENSAI_fminbnd(-6, 12, refCOV, Eval, Evec, 3, COV, template, signal_type, top_pcs);
+% Active-regime lower bound minThreshold = 0 prevents negative-threshold no-cleaning degeneracy
+[~, score] = SENSAI_fminbnd(0, 12, refCOV, Eval, Evec, 3, COV, template, signal_type, top_pcs);
 end
 
 function dist = compute_bures_distance(C0, C1)
