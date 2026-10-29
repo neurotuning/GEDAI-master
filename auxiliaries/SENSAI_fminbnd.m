@@ -20,27 +20,13 @@ sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eva
 
 % Under T1 = (105 - t)/100, t <= 3.5 removes zero components (flat plateau).
 % When noise_multiplier < 1.5 in a high-noise band, golden-section search on
-% [minThreshold, maxThreshold] can get trapped on the flat plateau if its first
-% upper probe overshoots the active peak. Refine on [3.5, maxThreshold].
-if maxThreshold > 3.5 && noise_multiplier < 1.5
-    t_grid = linspace(3.5, maxThreshold, 10);
-    f_best = negMaxSENSAIScore;
-    idx_best = 0;
-    for k = 1:numel(t_grid)
-        fk = sensaifunc(t_grid(k));
-        if fk < f_best - 1e-9
-            f_best = fk;
-            idx_best = k;
-        end
-    end
-    if idx_best > 0
-        a_sub = t_grid(max(1, idx_best - 1));
-        b_sub = t_grid(min(numel(t_grid), idx_best + 1));
-        [opt_sub, neg_sub] = local_fminbnd(sensaifunc, a_sub, b_sub, 1e-2);
-        if neg_sub < negMaxSENSAIScore - 1e-9
-            optimalThreshold = opt_sub;
-            negMaxSENSAIScore = neg_sub;
-        end
+% [minThreshold, maxThreshold] can get trapped on the flat plateau (t <= 3.5)
+% if its first upper probe overshoots the active peak. Refine on [3.5, maxThreshold].
+if maxThreshold > 3.5 && noise_multiplier < 1.5 && optimalThreshold <= 3.5
+    [opt_sub, neg_sub] = local_fminbnd(sensaifunc, 3.5, maxThreshold, 1e-2);
+    if neg_sub < negMaxSENSAIScore - 1e-9
+        optimalThreshold = opt_sub;
+        negMaxSENSAIScore = neg_sub;
     end
 end
 

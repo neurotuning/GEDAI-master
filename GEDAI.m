@@ -838,12 +838,16 @@ if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && str
         if ~silent_mode
             disp([newline 'Optimizing artifacting strength via fminbnd (maximizing SENSAI)...']);
         end
-        [optimal_artifact_strength, best_strength_sensai] = GEDAI_bayesopt_strength(...
+        [optimal_artifact_strength, best_strength_sensai, ~, selected_threshold_type] = GEDAI_bayesopt_strength(...
             double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, ...
             refCOV, bayesopt_evals, ~silent_mode, visualize_artifacts, ...
             signal_type, epoch_size_in_cycles, lowcut_frequency, parallelize);
-        artifact_threshold_type = optimal_artifact_strength;
-        threshold_label = sprintf('optimize (%.2f)', optimal_artifact_strength);
+        artifact_threshold_type = selected_threshold_type;
+        if isnumeric(selected_threshold_type)
+            threshold_label = sprintf('optimize (%.2f)', optimal_artifact_strength);
+        else
+            threshold_label = 'optimize (auto)';
+        end
     catch strength_err
         warning('GEDAI:StrengthBayesOptFailed', 'Artifacting strength optimization failed: %s. Continuing with ''auto''.', strength_err.message);
         artifact_threshold_type = 'auto';

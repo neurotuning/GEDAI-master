@@ -832,7 +832,8 @@ if ~any(topq_mask)
     topq_mask = true(1, w_len);
 end
 
-active_evals = all_evals_mat(2:end, topq_mask);
+k_start = max(2, N_chans - (M^3) + 1);
+active_evals = all_evals_mat(k_start:end, topq_mask);
 pos_evals = log(active_evals(active_evals > 0));
 if numel(pos_evals) >= 2
     iqr_log = max(0.5, prctile(pos_evals, 75) - prctile(pos_evals, 25));
