@@ -96,11 +96,13 @@ if ~isinf(smoothing_window_seconds)
     refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
     
     % --- Determine Noise Multiplier and Optimization Parameters ---
-    if ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto')
-        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5;
-        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6;
-        else, noise_multiplier = 3; 
+    is_auto_threshold = ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto');
+    auto_scale = 1.0;
+    if is_auto_threshold
+        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; auto_scale = 0.5;
+        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
+        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6; auto_scale = 2.0;
+        else, noise_multiplier = 3; auto_scale = 1.0;
         end
     else
         if isnumeric(artifact_threshold_type)
@@ -170,6 +172,11 @@ if ~isinf(smoothing_window_seconds)
         for i = 1:w_len
             COV_sub(:,:,i) = (COV_sub(:,:,i) + COV_sub(:,:,i)') / 2;
             [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(COV_sub(:,:,i), refCOV_reg, 'chol');
+        end
+        
+        if is_auto_threshold && strcmpi(signal_type, 'eeg')
+            noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
+                Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold);
         end
         
         switch optimization_type
@@ -497,11 +504,13 @@ else
     
     %% Determine Artifact Threshold and Clean EEG
     %% Determine Noise Multiplier and Optimization Parameters
-    if ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto')
-        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5;
-        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6;
-        else, noise_multiplier = 3; 
+    is_auto_threshold = ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto');
+    auto_scale = 1.0;
+    if is_auto_threshold
+        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; auto_scale = 0.5;
+        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
+        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6; auto_scale = 2.0;
+        else, noise_multiplier = 3; auto_scale = 1.0;
         end
     else
         % Numeric input defines noise_multiplier linkage
@@ -592,6 +601,11 @@ else
         Eval_sub = Eval(:,:,idx_start:idx_end);
         Evec_sub = Evec(:,:,idx_start:idx_end);
         COV_sub = COV(:,:,idx_start:idx_end);
+        
+        if is_auto_threshold && strcmpi(signal_type, 'eeg')
+            noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
+                Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold);
+        end
         
         switch optimization_type
             case 'parabolic'
@@ -771,4 +785,67 @@ target_chunk_bytes = 256 * 1024 * 1024;
 memory_limited_chunk_size = max(1, floor(target_chunk_bytes / max(estimated_scalars_per_epoch * bytes_per_scalar, 1)));
 
 chunk_size = max(1, min(time_limited_chunk_size, memory_limited_chunk_size));
+end
+
+function m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold)
+% Closed-form zero-parameter Z3_SENSAI_Pure noise multiplier law:
+%   Broadband (minThreshold == -4):
+%     m_eff = clamp(((N_chans / M^2) * PR) / (iqr_log^2 * c_1), [M - 1, 1.5 * M])
+%   Wavelet bands (minThreshold ~= -4):
+%     m_eff = clamp((M * PR) / (iqr_log^2 * max(c_1, (M - 1) / M)), [M, 1.5 * M])
+% Computed over the upper-half active epochs (peak GEVD eigenvalue >= median)
+% so partial temporal contamination is balanced against clean background epochs.
+
+[N_chans, ~, w_len] = size(Eval_sub);
+M = max(1, SSI_top_PCs);
+if N_chans <= 2 || w_len < 1
+    m_eff = double(M);
+    return;
+end
+
+all_evals_mat = zeros(N_chans, w_len);
+part_ratios   = zeros(1, w_len);
+top1_cos      = zeros(1, w_len);
+Template_guess = double(evecs_Template_cov);
+refCOV_reg_d   = double(refCOV_reg);
+
+for epo = 1:w_len
+    ev_raw = abs(double(diag(Eval_sub(:, :, epo))));
+    [ev, ord] = sort(ev_raw, 'ascend');
+    all_evals_mat(:, epo) = ev;
+    ev_act = ev(2:end);
+    part_ratios(epo) = (sum(ev_act)^2) / max(sum(ev_act.^2), 1e-12);
+    
+    v_top1 = double(Evec_sub(:, ord(end), epo));
+    p_top1 = refCOV_reg_d * v_top1;
+    top1_cos(epo) = norm(Template_guess' * (p_top1 / max(norm(p_top1), 1e-12)));
+end
+
+peak_ev = all_evals_mat(end, :);
+topq_mask = (peak_ev >= median(peak_ev));
+if ~any(topq_mask)
+    topq_mask = true(1, w_len);
+end
+
+active_evals = all_evals_mat(2:end, topq_mask);
+pos_evals = log(active_evals(active_evals > 0));
+if numel(pos_evals) >= 2
+    iqr_log = max(0.5, prctile(pos_evals, 75) - prctile(pos_evals, 25));
+else
+    iqr_log = 1.0;
+end
+
+PR = mean(part_ratios(topq_mask));
+c1 = max(0.15, min(0.95, mean(top1_cos(topq_mask))));
+M_d = double(M);
+
+if minThreshold == -4
+    scale_factor = double(N_chans) / (M_d^2);
+    m_raw = (scale_factor * PR) / ((iqr_log^2) * c1);
+    m_eff = max(M_d - 1.0, min(1.5 * M_d, m_raw));
+else
+    c1_floor = (M_d - 1.0) / M_d;
+    m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor));
+    m_eff = max(M_d, min(1.5 * M_d, m_raw));
+end
 end
