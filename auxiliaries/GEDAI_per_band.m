@@ -790,9 +790,14 @@ end
 function m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold)
 % Closed-form zero-parameter Z3_SENSAI_Pure noise multiplier law:
 %   Broadband (minThreshold == -4):
-%     m_eff = clamp(((N_chans / M^2) * PR) / (iqr_log^2 * c_1), [M - 1, 1.5 * M])
+%     excess_iqr = max(1, iqr_log / (M - 1))
+%     m_eff = clamp(((N_chans / M^2) * PR) / (iqr_log^2 * c_1 * excess_iqr^2),
+%                   [max(1/M^2, (M - 1)/excess_iqr^3), 1.5 * M])
 %   Wavelet bands (minThreshold ~= -4):
-%     m_eff = clamp((M * PR) / (iqr_log^2 * max(c_1, (M - 1) / M)), [M, 1.5 * M])
+%     iqr_ref = M - clamp((c1_floor - c_1) / (1 - c1_floor), [0, 1])
+%     excess_iqr = 1 + max(0, iqr_log - iqr_ref) / (M - 1)
+%     m_eff = clamp((M * PR) / (iqr_log^2 * max(c_1, c1_floor) * excess_iqr^2),
+%                   [max(1/M^2, M/excess_iqr^3), 1.5 * M])
 % Computed over the upper-half active epochs (peak GEVD eigenvalue >= median)
 % so partial temporal contamination is balanced against clean background epochs.
 
@@ -841,11 +846,17 @@ M_d = double(M);
 
 if minThreshold == -4
     scale_factor = double(N_chans) / (M_d^2);
-    m_raw = (scale_factor * PR) / ((iqr_log^2) * c1);
-    m_eff = max(M_d - 1.0, min(1.5 * M_d, m_raw));
+    excess_iqr = max(1.0, iqr_log / (M_d - 1.0));
+    m_raw = (scale_factor * PR) / ((iqr_log^2) * c1 * (excess_iqr^2));
+    m_floor = max(1.0 / (M_d^2), (M_d - 1.0) / (excess_iqr^3));
+    m_eff = max(m_floor, min(1.5 * M_d, m_raw));
 else
     c1_floor = (M_d - 1.0) / M_d;
-    m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor));
-    m_eff = max(M_d, min(1.5 * M_d, m_raw));
+    w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)));
+    iqr_ref = M_d - w_nondip;
+    excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
+    m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
+    m_floor = max(1.0 / (M_d^2), M_d / (excess_iqr^3));
+    m_eff = max(m_floor, min(1.5 * M_d, m_raw));
 end
 end
