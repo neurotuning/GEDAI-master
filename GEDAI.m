@@ -179,6 +179,7 @@ silent_mode = false;
 k_channel_multiplier = 1.0; % minimum epoch length = k * channels samples
 num_channels_rejected = 0;
 total_original_channels = size(EEGin.data, 1);
+override_refCOV = [];
 
 if ~isempty(varargin)
     for vargIdx = 1:length(varargin)
@@ -194,6 +195,9 @@ if ~isempty(varargin)
                 original_channel_threshold = currentArg.original_channel_threshold;
                 num_channels_rejected = currentArg.num_channels_rejected;
                 total_original_channels = currentArg.total_original_channels;
+            end
+            if isfield(currentArg, 'override_refCOV')
+                override_refCOV = currentArg.override_refCOV;
             end
         end
     end
@@ -593,7 +597,16 @@ else
 end
 
 %% Create Reference Covariance Matrix (refCOV)
-[refCOV, G_full, resolved_leadfield_method] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+if ~isempty(override_refCOV)
+    refCOV = override_refCOV;
+    G_full = [];
+    resolved_leadfield_method = 'override';
+    if strcmpi(reference_mode, 'REST')
+        [~, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+    end
+else
+    [refCOV, G_full, resolved_leadfield_method] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+end
 C_LF = refCOV; % Store baseline invariant anatomical reference
 if ~silent_mode && strcmp(signal_type, 'eeg')
     if strcmp(resolved_leadfield_method, 'precomputed')
@@ -626,15 +639,20 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
         C_LF = refCOV;
         if ~silent_mode
             if is_mccann_requested
-                disp([newline 'Executing Pass 0 baseline denoising for 2-Pass McCann Geodesic (Top 75% Clean Epochs)...']);
+                disp([newline 'Executing Pass 0 baseline denoising for SENSAI-Guided McCann Geodesic (Top 75% Clean Epochs)...']);
             else
                 disp([newline 'Executing Pass 0 baseline denoising for 2-Pass Linear Blend (Top 75% Clean Epochs)...']);
             end
         end
         
-        % Pass 0: initial baseline denoising with theoretical leadfield
+        cand_thresh_type = artifact_threshold_type;
+        if (ischar(cand_thresh_type) || isstring(cand_thresh_type)) && strcmpi(char(cand_thresh_type), 'optimize')
+            cand_thresh_type = 'auto';
+        end
+        
+        % Pass 0: initial baseline denoising with theoretical leadfield (t = 0.00)
         pass0_opts = struct('silent', true);
-        [EEG_clean0, EEG_art0] = GEDAI(EEGin, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ...
+        [EEG_clean0, EEG_art0, SENSAI_0] = GEDAI(EEGin, cand_thresh_type, epoch_size_in_cycles, lowcut_frequency, ...
             ref_matrix_type, parallelize, false, inf, inf, ...
             signal_type, smoothing_window_seconds, output_reference_channel, 'prior_blend', 'off', pass0_opts);
         
@@ -686,7 +704,8 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
         alpha_blend = 0.50;
         
         if is_mccann_requested
-            % Exact Bures-Wasserstein (McCann) Geodesic Midpoint between C_LF and C_scaled
+            % Bures-Wasserstein (McCann) Geodesic between C_LF and C_scaled
+            % Option B (Full SENSAI-Guided [0..0.5]): Evaluates t in {0.15, 0.30, 0.50} vs Pass-0 (t = 0.00)
             N_ch = size(C_LF, 1);
             reg_eps = 1e-6 * trace(C_LF) / N_ch;
             C0_reg = C_LF + reg_eps * eye(N_ch);
@@ -698,13 +717,33 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
             mid = real((sC0 * C1_reg * sC0 + (sC0 * C1_reg * sC0)') / 2);
             [Vm, Dm] = eig(mid);
             M_bw = isC0 * (Vm * diag(sqrt(max(real(diag(Dm)), 0))) * Vm') * isC0;
-            Mt = (1 - alpha_blend) * eye(N_ch) + alpha_blend * M_bw;
-            refCOV = Mt * C_LF * Mt';
-            refCOV = real((refCOV + refCOV') / 2);
-            refCOV = refCOV * (trace(C_LF) / max(trace(refCOV), 1e-12));
+            
+            t_grid = [0.00, 0.15, 0.30, 0.50];
+            sensai_grid = [SENSAI_0, -inf, -inf, -inf];
+            C_grid = cell(1, numel(t_grid));
+            C_grid{1} = C_LF;
+            
+            for idx_t = 2:numel(t_grid)
+                t_cand = t_grid(idx_t);
+                Mt = (1 - t_cand) * eye(N_ch) + t_cand * M_bw;
+                C_cand = Mt * C_LF * Mt';
+                C_cand = real((C_cand + C_cand') / 2);
+                C_cand = C_cand * (trace(C_LF) / max(trace(C_cand), 1e-12));
+                C_grid{idx_t} = C_cand;
+                
+                cand_opts = struct('silent', true, 'override_refCOV', C_cand);
+                [~, ~, S_cand] = GEDAI(EEGin, cand_thresh_type, epoch_size_in_cycles, lowcut_frequency, ...
+                    ref_matrix_type, parallelize, false, inf, inf, ...
+                    signal_type, smoothing_window_seconds, output_reference_channel, 'prior_blend', 'off', cand_opts);
+                sensai_grid(idx_t) = S_cand;
+            end
+            
+            [best_sensai, best_idx] = max(sensai_grid);
+            alpha_blend = t_grid(best_idx);
+            refCOV = C_grid{best_idx};
             optimal_blend_gamma = alpha_blend;
             if ~silent_mode
-                disp([newline sprintf('Refined reference covariance using 2-Pass McCann Geodesic (Top 75%%%% Epochs, t = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
+                disp([newline sprintf('SENSAI-Guided McCann Geodesic selected t = %.2f (SENSAI: %.1f%% vs Pass 0: %.1f%%). Proceeding to final denoising...', alpha_blend, best_sensai, SENSAI_0)]);
             end
         else
             % 2-Pass Linear Blend between C_LF and C_scaled
@@ -712,7 +751,7 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
             refCOV = real((refCOV + refCOV') / 2);
             optimal_blend_gamma = alpha_blend;
             if ~silent_mode
-                disp([newline sprintf('Refined reference covariance using 2-Pass Linear Blend (Top 75%%%% Epochs, alpha = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
+                disp([newline sprintf('Refined reference covariance using 2-Pass Linear Blend (Top 75%% Epochs, alpha = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
             end
         end
     catch blend_err
