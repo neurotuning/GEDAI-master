@@ -34,22 +34,15 @@
 %
 %   ref_matrix_type             - Matrix used as a reference for deartifacting.
 %
-%                                  The default "precomputed" uses a BEM leadfield for
-%                                  standard electrode locations precomputed through
-%                                  OPENMEEG (343 electrodes) based on 10-5 system.
+%                                 Default is "auto" (or "precomputed" / "projection"):
+%                                 - If standard 10-05 electrode labels are present,
+%                                   uses the precomputed OpenMEEG BEM leadfield (343 electrodes).
+%                                 - If non-standard electrode labels are present,
+%                                   projects the 343-channel OpenMEEG BEM leadfield onto
+%                                   the channel locations via cortical dipole kernel regression.
 %
-%                                 "interpolated" uses the precomputed leadfield and
-%                                 interpolates it to non-standard electrode locations.
-%
-%                                 "projection" projects the precomputed 343-channel
-%                                 OpenMEEG BEM leadfield onto current electrode locations
-%                                 via cortical source-space dipole kernel regression.
-%
-%                                 "warped" uses an EEGLAB/Fieldtrip BEM surface source model
-%                                 (Colin27) warped to the current electrode locations.
-%
-%                                 Altenatively, you can input a "custom" covariance matrix
-%                                 (with dimensions channel x channel) via a matlab variable
+%                                 Alternatively, you can input a "custom" covariance matrix
+%                                 (with dimensions channel x channel) via a matlab variable.
 %
 %
 %   parallelize                    - Boolean for using parallel ('multicore') processing
@@ -131,7 +124,7 @@ if nargin < 4 || isempty(lowcut_frequency)
     lowcut_frequency = 0.5; %  exclude all wavelet bands below this frequency (default = 0.5 Hz)
 end
 if nargin < 5 || isempty(ref_matrix_type)
-    ref_matrix_type = 'precomputed';
+    ref_matrix_type = 'auto';
 end
 if nargin < 6 || isempty(parallelize)
     parallelize = true;
@@ -600,8 +593,15 @@ else
 end
 
 %% Create Reference Covariance Matrix (refCOV)
-[refCOV, G_full] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
+[refCOV, G_full, resolved_leadfield_method] = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEG_av, signal_type, internal_reference);
 C_LF = refCOV; % Store baseline invariant anatomical reference
+if ~silent_mode && strcmp(signal_type, 'eeg')
+    if strcmp(resolved_leadfield_method, 'precomputed')
+        disp(['Leadfield: Precomputed 10-05 template (' num2str(size(EEGin.data, 1)) '/' num2str(size(EEGin.data, 1)) ' standard labels matched)']);
+    elseif strcmp(resolved_leadfield_method, 'projection')
+        disp('Leadfield: 3D dipole projection from channel coordinates');
+    end
+end
 
 if strcmpi(reference_mode, 'REST')
     EEGavRef = GEDAI_apply_data_reference(EEGin, reference_mode, G_full);
@@ -1523,6 +1523,7 @@ EEGclean.etc.GEDAI.epochs_rejected = num_rejected;
 EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
 EEGclean.etc.GEDAI.refCOV = refCOV;
+EEGclean.etc.GEDAI.leadfield_method = resolved_leadfield_method;
 EEGclean.etc.GEDAI.prior_blend_gamma = optimal_blend_gamma;
 EEGclean.etc.GEDAI.threshold_label = threshold_label;
 if exist('optimal_artifact_strength', 'var') && ~isnan(optimal_artifact_strength)
@@ -1794,9 +1795,9 @@ end
 L_data = cached;
 end
 
-function [refCOV,G_full] = GEDAI_create_refCOV(ref_matrix_type,EEGin,EEGavRef,signal_type,internal_reference)
+function [refCOV,G_full,leadfield_method] = GEDAI_create_refCOV(ref_matrix_type,EEGin,EEGavRef,signal_type,internal_reference)
 if nargin<5 || isempty(internal_reference), internal_reference='AvgRef'; end
-internal_reference=GEDAI_normalize_reference_mode(internal_reference); G_full=[];
+internal_reference=GEDAI_normalize_reference_mode(internal_reference); G_full=[]; leadfield_method='custom';
 if isnumeric(ref_matrix_type)
     refCOV=ref_matrix_type; disp([newline 'Using custom covariance matrix']);
     if ~strcmpi(internal_reference,'REST')
@@ -1816,114 +1817,118 @@ if isnumeric(ref_matrix_type)
     end
     refCOV=real((refCOV+refCOV')/2); return;
 end
-switch lower(char(ref_matrix_type))
-    case 'precomputed'
-        L=GEDAI_load_template_leadfield(); labels={EEGin.chanlocs.labels}; tmpl={L.leadfield4GEDAI.electrodes.Name}; idx=zeros(1,length(labels));
-        for i=1:length(labels)
-            [found,j]=ismember(lower(labels{i}),lower(tmpl));
-            if found, idx(i)=j; else
-                for j=1:length(tmpl), if contains(lower(labels{i}),lower(tmpl{j})), idx(i)=j; break; end, end
-            end
-        end
-        if any(idx==0), error('GEDAI:ElectrodeLabelsNotFound','Electrode labels not found: %s.',strjoin(labels(idx==0),', ')); end
-        if strcmpi(internal_reference, 'AvgRef')
-            G_343_av = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
-            G_full = G_343_av(idx, :);
-            C_343 = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
-            C_343 = real((C_343 + C_343') / 2);
-            C_343_n = C_343 / max(trace(C_343), 1e-12);
-            n_ch = length(idx);
-            R_n = eye(n_ch) - ones(n_ch) / n_ch;
-            C0n = (R_n * C_343_n * R_n') / max(trace(R_n * C_343_n * R_n'), 1e-12);
-            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
-            refCOV = spec.R * C0n * spec.R';
-            refCOV = real((refCOV + refCOV') / 2);
-            return;
-        elseif strcmpi(internal_reference, 'REST')
-            G_full = L.leadfield4GEDAI.Gain(idx, :);
-            refCOV = L.leadfield4GEDAI.gram_matrix(idx, idx);
-            refCOV = real((refCOV + refCOV') / 2);
-            refCOV = refCOV / max(trace(refCOV), 1e-12);
-            return;
-        else
-            G_raw = L.leadfield4GEDAI.Gain(idx, :);
-            G_full = GEDAI_apply_leadfield_reference(G_raw, EEGin.chanlocs, internal_reference);
-        end
-    case 'interpolated'
-        n=length(EEGavRef.chanlocs);
-        if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
-        L=GEDAI_load_template_leadfield(); lf=L.leadfield4GEDAI.EEG;
-        if strcmpi(internal_reference, 'AvgRef')
-            lf.data = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
-            tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
-            G_full=tmp.data;
-            C_interp = real((G_full*G_full'+(G_full*G_full')')/2);
-            R_n = eye(n) - ones(n) / n;
-            C0n = R_n * C_interp * R_n';
-            C0n = real((C0n + C0n') / 2);
-            C0n = C0n / max(trace(C0n), 1e-12);
-            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
-            refCOV = spec.R * C0n * spec.R';
-            refCOV = real((refCOV + refCOV') / 2);
-            return;
-        else
-            lf.data = L.leadfield4GEDAI.Gain;
-            tmp=interp_mont_GEDAI(lf,EEGavRef.chanlocs);
-            G_full=GEDAI_apply_leadfield_reference(tmp.data,EEGavRef.chanlocs,internal_reference);
-        end
-    case {'projection', 'projected'}
-        n=length(EEGavRef.chanlocs);
-        target_locs = sanitize_and_fill_chanlocs(EEGavRef.chanlocs);
-        if length([target_locs.X])~=n || length([target_locs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
-        L=GEDAI_load_template_leadfield();
-        if strcmpi(internal_reference, 'AvgRef')
-            G_full = GEDAI_project_leadfield_dipole(L, target_locs, true);
-            C_proj = real((G_full*G_full'+(G_full*G_full')')/2);
-            R_n = eye(n) - ones(n) / n;
-            C0n = R_n * C_proj * R_n';
-            C0n = real((C0n + C0n') / 2);
-            C0n = C0n / max(trace(C0n), 1e-12);
-            spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
-            refCOV = spec.R * C0n * spec.R';
-            refCOV = real((refCOV + refCOV') / 2);
-            return;
-        else
-            G_raw = GEDAI_project_leadfield_dipole(L, target_locs, false);
-            G_full = GEDAI_apply_leadfield_reference(G_raw, EEGavRef.chanlocs, internal_reference);
-        end
-    case 'warped'
-        n=length(EEGavRef.chanlocs);
-        if length([EEGavRef.chanlocs.X])~=n || length([EEGavRef.chanlocs.theta])~=n, error('GEDAI:IncompleteChannelLocations','All channels require spatial coordinates.'); end
-        
-        spec_warp = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
-        EEGin_lf = EEGin;
-        if spec_warp.is_external_ref
-            ref_loc = sanitize_and_fill_chanlocs(struct('labels', spec_warp.external_ref_label));
-            EEGin_lf.chanlocs(end+1) = ref_loc;
-            EEGin_lf.nbchan = length(EEGin_lf.chanlocs);
-            if ~isempty(EEGin_lf.data)
-                EEGin_lf.data(end+1, :) = 0;
-            end
-        end
-        
-        [~,tr]=coregister(EEGin_lf.chanlocs,'standard_1005.elc','manual','off');
-        EEGin_lf=pop_dipfit_settings(EEGin_lf,'hdmfile','standard_vol.mat','mrifile','standard_mri.mat','chanfile','standard_1005.elc','coordformat','MNI','coord_transform',tr);
-        EEGin_lf=pop_leadfield(EEGin_lf,'sourcemodel','head_modelColin27_5003_Standard-10-5-Cap339.mat','sourcemodel2mni',[0 -24 -45 0 0 -1.5708 1000 1000 1000],'downsample',1);
-        G_all=cell2mat(EEGin_lf.dipfit.sourcemodel.leadfield);
-        
-        if spec_warp.is_external_ref
-            G_ref_row = G_all(end, :);
-            G_raw = G_all(1:n, :);
-            G_full = G_raw - ones(n, 1) * G_ref_row;
-        else
-            G_raw = G_all;
-            G_full = GEDAI_apply_leadfield_reference(G_raw,EEGavRef.chanlocs,internal_reference);
-        end
-    otherwise
-        error('GEDAI:UnknownReferenceMatrixType','Unknown ref_matrix_type: %s',char(ref_matrix_type));
+
+if ~isfield(EEGin, 'chanlocs') || isempty(EEGin.chanlocs)
+    error('GEDAI:MissingChannelLabelsOrLocations', 'Either standard electrode labels or channel spatial locations must be provided in EEG.chanlocs.');
+end
+
+L = GEDAI_load_template_leadfield();
+tmpl = {L.leadfield4GEDAI.electrodes.Name};
+n = length(EEGin.chanlocs);
+idx = GEDAI_match_template_labels(EEGin.chanlocs, tmpl);
+
+% Automatic leadfield mode selection:
+% 1. If all electrode labels match the standard 343-channel 10-05 template (unless 'projection' was explicitly forced), use precomputed.
+% 2. Otherwise, if valid spatial coordinates exist for all channels, use dipole kernel projection.
+% 3. If neither standard labels nor spatial coordinates are available, throw an error.
+force_projection = (ischar(ref_matrix_type) || isstring(ref_matrix_type)) && ...
+    ismember(lower(strtrim(char(ref_matrix_type))), {'projection', 'projected'});
+
+if all(idx > 0) && ~force_projection
+    leadfield_method = 'precomputed';
+    if strcmpi(internal_reference, 'AvgRef')
+        G_343_av = L.leadfield4GEDAI.Gain - mean(L.leadfield4GEDAI.Gain, 1);
+        G_full = G_343_av(idx, :);
+        C_343 = L.leadfield4GEDAI.gram_matrix_avref(idx, idx);
+        C_343 = real((C_343 + C_343') / 2);
+        C_343_n = C_343 / max(trace(C_343), 1e-12);
+        n_ch = length(idx);
+        R_n = eye(n_ch) - ones(n_ch) / n_ch;
+        C0n = (R_n * C_343_n * R_n') / max(trace(R_n * C_343_n * R_n'), 1e-12);
+        spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+        refCOV = spec.R * C0n * spec.R';
+        refCOV = real((refCOV + refCOV') / 2);
+        return;
+    elseif strcmpi(internal_reference, 'REST')
+        G_full = L.leadfield4GEDAI.Gain(idx, :);
+        refCOV = L.leadfield4GEDAI.gram_matrix(idx, idx);
+        refCOV = real((refCOV + refCOV') / 2);
+        refCOV = refCOV / max(trace(refCOV), 1e-12);
+        return;
+    else
+        G_raw = L.leadfield4GEDAI.Gain(idx, :);
+        G_full = GEDAI_apply_leadfield_reference(G_raw, EEGin.chanlocs, internal_reference);
+    end
+else
+    leadfield_method = 'projection';
+    if ~GEDAI_has_valid_locations(EEGavRef.chanlocs, idx)
+        error('GEDAI:MissingChannelLabelsOrLocations', ...
+            'Either standard electrode labels or valid channel spatial locations (X,Y,Z or theta,radius) must be provided for all channels.');
+    end
+    target_locs = sanitize_and_fill_chanlocs(EEGavRef.chanlocs);
+    if strcmpi(internal_reference, 'AvgRef')
+        G_full = GEDAI_project_leadfield_dipole(L, target_locs, true);
+        C_proj = real((G_full*G_full'+(G_full*G_full')')/2);
+        R_n = eye(n) - ones(n) / n;
+        C0n = R_n * C_proj * R_n';
+        C0n = real((C0n + C0n') / 2);
+        C0n = C0n / max(trace(C0n), 1e-12);
+        spec = GEDAI_create_reference_spec(EEGin.chanlocs, internal_reference);
+        refCOV = spec.R * C0n * spec.R';
+        refCOV = real((refCOV + refCOV') / 2);
+        return;
+    else
+        G_raw = GEDAI_project_leadfield_dipole(L, target_locs, false);
+        G_full = GEDAI_apply_leadfield_reference(G_raw, EEGavRef.chanlocs, internal_reference);
+    end
 end
 refCOV=real((G_full*G_full'+(G_full*G_full')')/2);
 refCOV=refCOV/max(trace(refCOV),1e-12);
+end
+
+function idx = GEDAI_match_template_labels(chanlocs, tmpl)
+n = length(chanlocs);
+idx = zeros(1, n);
+if ~isfield(chanlocs, 'labels'), return; end
+tmpl_lower = lower(strtrim(tmpl));
+alias_from = {'t3', 't4', 't5', 't6'};
+alias_to   = {'t7', 't8', 'p7', 'p8'};
+for i = 1:n
+    lbl = strtrim(char(string(chanlocs(i).labels)));
+    if isempty(lbl), continue; end
+    % Strip common hardware prefixes/suffixes (e.g., 'EEG Fz-Ref' -> 'Fz')
+    lbl = regexprep(lbl, '^eeg[\s_-]+', '', 'ignorecase');
+    lbl = regexprep(lbl, '[\s_-]*(ref|av|avg|le|ear)$', '', 'ignorecase');
+    lbl_low = lower(strtrim(lbl));
+    [is_alias, a_idx] = ismember(lbl_low, alias_from);
+    if is_alias
+        lbl_low = alias_to{a_idx};
+    end
+    [found, j] = ismember(lbl_low, tmpl_lower);
+    if found
+        idx(i) = j;
+    end
+end
+end
+
+function ok = GEDAI_has_valid_locations(chanlocs, matched_tmpl_idx)
+n = length(chanlocs);
+if n == 0, ok = false; return; end
+ok = true;
+for i = 1:n
+    if nargin >= 2 && length(matched_tmpl_idx) >= i && matched_tmpl_idx(i) > 0
+        continue;
+    end
+    has_xyz = isfield(chanlocs(i), 'X') && ~isempty(chanlocs(i).X) && isnumeric(chanlocs(i).X) && isscalar(chanlocs(i).X) && isfinite(chanlocs(i).X) && ...
+              isfield(chanlocs(i), 'Y') && ~isempty(chanlocs(i).Y) && isnumeric(chanlocs(i).Y) && isscalar(chanlocs(i).Y) && isfinite(chanlocs(i).Y) && ...
+              isfield(chanlocs(i), 'Z') && ~isempty(chanlocs(i).Z) && isnumeric(chanlocs(i).Z) && isscalar(chanlocs(i).Z) && isfinite(chanlocs(i).Z);
+    has_pol = isfield(chanlocs(i), 'theta') && ~isempty(chanlocs(i).theta) && isnumeric(chanlocs(i).theta) && isscalar(chanlocs(i).theta) && isfinite(chanlocs(i).theta) && ...
+              isfield(chanlocs(i), 'radius') && ~isempty(chanlocs(i).radius) && isnumeric(chanlocs(i).radius) && isscalar(chanlocs(i).radius) && isfinite(chanlocs(i).radius);
+    if ~has_xyz && ~has_pol
+        ok = false;
+        return;
+    end
+end
 end
 
 function chanlocs = sanitize_and_fill_chanlocs(chanlocs)
@@ -1956,8 +1961,8 @@ for idx = 1:length(chanlocs)
 
     if ~has_xyz && ~has_polar && ~isempty(leadfield_electrodes) && isfield(chanlocs(idx), 'labels') && ~isempty(chanlocs(idx).labels)
         temp_names = {leadfield_electrodes.Name};
-        match_idx = find(strcmpi(strtrim(chanlocs(idx).labels), temp_names), 1);
-        if ~isempty(match_idx) && ~isempty(leadfield_electrodes(match_idx).Loc)
+        match_idx = GEDAI_match_template_labels(chanlocs(idx), temp_names);
+        if match_idx > 0 && ~isempty(leadfield_electrodes(match_idx).Loc)
             loc_3d = leadfield_electrodes(match_idx).Loc;
             chanlocs(idx).X = loc_3d(1);
             chanlocs(idx).Y = loc_3d(2);
