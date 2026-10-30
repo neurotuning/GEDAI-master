@@ -110,10 +110,17 @@ if nargin >= 10 && ~isempty(SENSAI_score)
     if nargin < 12 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
     if nargin < 13 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
     if isempty(artifact_threshold_type), artifact_threshold_type = 'auto'; end
+    if isnumeric(artifact_threshold_type)
+        artifact_threshold_str = num2str(artifact_threshold_type, '%.2f');
+    elseif isstring(artifact_threshold_type)
+        artifact_threshold_str = char(artifact_threshold_type);
+    else
+        artifact_threshold_str = artifact_threshold_type;
+    end
     if isempty(smoothing_window_seconds), smoothing_window_seconds = Inf; end
 
     spacer = '              '; % Doubled whitespace separation (2 tabs)
-    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%' spacer 'ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '%' spacer '[' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
+    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%' spacer 'ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '%' spacer '[' artifact_threshold_str ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
 else
     plot_title = 'SENSAI visualization:  Subspace Similarity  vs  Epoch Power';
 end

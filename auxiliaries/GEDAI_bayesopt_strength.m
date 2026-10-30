@@ -35,10 +35,44 @@ parallelize = logical(parallelize);
 % Ensure data is double
 data = double(data);
 
-% Limit evaluation data to 60 seconds for fast convergence
+% Limit evaluation data to 60 seconds for fast convergence.
+% When the recording is longer than 60s, extract 3 evenly spaced 20-second
+% contiguous blocks (start, middle, end) with cosine cross-fades at the
+% seams so non-stationary recordings are evaluated representatively across
+% their entire duration without boundary filter ringing.
 max_samples = round(60 * srate);
-if size(data, 2) > max_samples
-    eval_data = data(:, 1:max_samples);
+pnts_total = size(data, 2);
+if pnts_total > max_samples
+    n_blocks = 3;
+    block_len = floor(max_samples / n_blocks);
+    % Ensure block_len is at least 15s and even
+    block_len = max(block_len, min(pnts_total, round(15 * srate)));
+    if rem(block_len, 2) ~= 0, block_len = block_len - 1; end
+    if n_blocks * block_len >= pnts_total
+        eval_data = data(:, 1:max_samples);
+    else
+        starts = round(linspace(1, pnts_total - block_len + 1, n_blocks));
+        eval_data = zeros(size(data, 1), n_blocks * block_len);
+        seam_len = min(round(0.25 * srate), floor(block_len / 8));
+        for b = 1:n_blocks
+            blk = data(:, starts(b):(starts(b) + block_len - 1));
+            out_idx = (b - 1) * block_len + (1:block_len);
+            eval_data(:, out_idx) = blk;
+        end
+        % Smooth seams between blocks to prevent Haar MODWT step transients
+        if seam_len >= 4
+            w_rise = 0.5 * (1 - cos( pi * (0:seam_len-1) / max(seam_len-1, 1) ));
+            for b = 1:(n_blocks - 1)
+                seam_end = b * block_len;
+                mid_val = 0.5 * (eval_data(:, seam_end) + eval_data(:, seam_end + 1));
+                for k = 1:seam_len
+                    alpha_k = w_rise(k); % 0 at far left of seam, 1 at seam boundary
+                    eval_data(:, seam_end - seam_len + k) = (1 - 0.5*alpha_k) * eval_data(:, seam_end - seam_len + k) + (0.5*alpha_k) * mid_val;
+                    eval_data(:, seam_end + k) = (1 - 0.5*w_rise(seam_len - k + 1)) * eval_data(:, seam_end + k) + (0.5*w_rise(seam_len - k + 1)) * mid_val;
+                end
+            end
+        end
+    end
 else
     eval_data = data;
 end
@@ -164,8 +198,10 @@ end
 
 function neg_sensai = eval_strength_objective(strength_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize)
     try
+        % Pass 'None' for output_reference_channel because EEG_eval.data and
+        % ref_matrix passed from GEDAI.m have already been referenced once.
         [~, ~, sensai] = GEDAI(EEG_eval, strength_val, epoch_size_in_cycles, lowcut_frequency, ...
-            ref_matrix, parallelize, false, Inf, Inf, signal_type, Inf, '', ...
+            ref_matrix, parallelize, false, Inf, Inf, signal_type, Inf, 'None', ...
             'prior_blend', 'off', struct('silent', true));
         neg_sensai = -sensai;
     catch

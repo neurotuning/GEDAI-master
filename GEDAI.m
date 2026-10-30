@@ -152,7 +152,6 @@ end
 precomputed_ENOVA_per_epoch = [];
 output_reference_channel = '';
 prior_blend = 'off';
-prior_target_band = 'Alpha';
 bayesopt_evals = 12;
 com = '';
 
@@ -169,13 +168,10 @@ if ~isempty(varargin)
             if strcmp(str_arg, 'prior_blend') && vargIdx < length(varargin)
                 prior_blend = varargin{vargIdx + 1};
                 skip_next = true;
-            elseif strcmp(str_arg, 'prior_target_band') && vargIdx < length(varargin)
-                prior_target_band = char(varargin{vargIdx + 1});
-                skip_next = true;
             elseif strcmp(str_arg, 'bayesopt_evals') && vargIdx < length(varargin)
                 bayesopt_evals = varargin{vargIdx + 1};
                 skip_next = true;
-            elseif isempty(output_reference_channel) && ~ismember(str_arg, {'prior_blend', 'prior_target_band', 'bayesopt_evals'})
+            elseif isempty(output_reference_channel) && ~ismember(str_arg, {'prior_blend', 'bayesopt_evals'})
                 output_reference_channel = char(currentArg);
             end
         elseif isnumeric(currentArg) && ~isscalar(currentArg) && isempty(precomputed_ENOVA_per_epoch)
@@ -317,7 +313,7 @@ if ENOVA_threshold_per_channel < inf
 
     % Run GEDAI with channel rejection disabled (inf) to identify bad channels
     % Also disable epoch rejection in pass 1 so channel variance isn't computed on incomplete data
-    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, 'prior_blend', prior_blend, 'prior_target_band', prior_target_band, struct('silent', true, 'k_channel_multiplier', k_channel_multiplier));
+    [~, ~, ~, ~, ~, mean_ENOVA_p1, ENOVA_per_epoch_p1, ~, ~, ENOVA_per_channel_val_p1] = GEDAI(EEG_p1, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_p1, parallelize, false, inf, inf, signal_type, smoothing_window_seconds, output_reference_channel, 'prior_blend', prior_blend, struct('silent', true, 'k_channel_multiplier', k_channel_multiplier));
 
     clear EEGclean_p1 EEGartifacts_p1; % Free memory
 
@@ -365,7 +361,7 @@ if ENOVA_threshold_per_channel < inf
         disp([newline '--- PASS 2: Processing reduced data with global epoch thresholds ---']);
         [EEGclean, EEGartifacts, SENSAI_score, SENSAI_score_per_band, artifact_threshold_per_band, mean_ENOVA, ENOVA_per_epoch, com, ENOVA_per_band] = ...
             GEDAI(EEG_reduced, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type_reduced, parallelize, false, ENOVA_threshold_per_epoch, inf, signal_type, smoothing_window_seconds, output_reference_channel, ENOVA_per_epoch_p1, ...
-            'prior_blend', prior_blend, 'prior_target_band', prior_target_band, ...
+            'prior_blend', prior_blend, ...
             struct('original_channel_threshold', original_channel_threshold, 'num_channels_rejected', length(channels_to_remove), 'total_original_channels', size(EEGin.data, 1), 'k_channel_multiplier', k_channel_multiplier));
 
         % --- INTERPOLATION ---
@@ -493,9 +489,6 @@ if ENOVA_threshold_per_channel < inf
                         refCOV_full = GEDAI_subspace_mccann_prior(double(EEGavRef_for_vis.data), ...
                             EEGavRef_for_vis.srate, EEGavRef_for_vis.chanlocs, refCOV_full, ...
                             reference_mode, lowcut_frequency, epoch_size_in_cycles, signal_type, false);
-                    elseif isnumeric(prior_blend) || strcmpi(char(prior_blend), 'optimize')
-                        C_EC_full = GEDAI_load_empirical_centroid(EEGavRef_for_vis.chanlocs, prior_target_band, reference_mode);
-                        refCOV_full = GEDAI_ewok_geodesic_blend(refCOV_full, C_EC_full, optimal_blend_gamma);
                     end
                 catch
                 end
@@ -504,7 +497,12 @@ if ENOVA_threshold_per_channel < inf
             if ~isempty(refCOV_full)
                 vis_pcs = 3;
                 sensai_epoch_size = 1;
-                visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
+                if isfield(EEGclean, 'etc') && isfield(EEGclean.etc, 'GEDAI') && isfield(EEGclean.etc.GEDAI, 'threshold_label')
+                    vis_threshold_label = EEGclean.etc.GEDAI.threshold_label;
+                else
+                    vis_threshold_label = threshold_label;
+                end
+                visualization_metrics = SENSAI_visualization(EEGavRef_for_vis, EEGclean, EEGartifacts, refCOV_full, sensai_epoch_size, signal_type, vis_pcs, vis_threshold_label, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
                 EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
             end
 
@@ -622,7 +620,7 @@ else
     EEGavRef = EEG_av;
 end
 
-%% Riemannian Prior Geodesic Blending (EWOK Framework) / Subspace McCann / 2-Pass Linear Blending
+%% Subspace McCann / 2-Pass Linear Blending
 optimal_blend_gamma = 0;
 is_blended_requested = false;
 is_subspace_mccann_requested = false;
@@ -636,9 +634,7 @@ if ischar(prior_blend) || isstring(prior_blend)
         (contains(str_blend_lower, 'option4') || contains(str_blend_lower, 'enova'));
     is_2pass_requested = ~is_subspace_mccann_requested && ...
         contains(str_blend_lower, '2pass') && ~is_option4_requested;
-    is_blended_requested = ~strcmpi(str_blend_lower, 'off');
-elseif isnumeric(prior_blend) && isscalar(prior_blend)
-    is_blended_requested = (prior_blend > 0);
+    is_blended_requested = is_subspace_mccann_requested || is_option4_requested || is_2pass_requested;
 end
 
 if is_blended_requested && strcmp(signal_type, 'eeg')
@@ -698,11 +694,10 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
                 EEGclean.etc.GEDAI.option4_qualifying_epochs = qual_idx;
                 EEGclean.etc.GEDAI.option4_weight = 0;
                 if isempty(com)
-                    com = sprintf('EEG = GEDAI(EEG, %s, %g, %g, ''%s'', %d, %d, %g, %g, ''%s'', %g, ''%s'', ''prior_blend'', ''option4'', ''prior_target_band'', ''%s'');', ...
+                    com = sprintf('EEG = GEDAI(EEG, %s, %g, %g, ''%s'', %d, %d, %g, %g, ''%s'', %g, ''%s'', ''prior_blend'', ''option4'');', ...
                         threshold_com_str, epoch_size_in_cycles, lowcut_frequency, char(string(ref_matrix_type)), ...
                         double(parallelize), double(visualize_artifacts), ENOVA_threshold_per_epoch, ...
-                        ENOVA_threshold_per_channel, signal_type, smoothing_window_seconds, output_reference_channel, ...
-                        prior_target_band);
+                        ENOVA_threshold_per_channel, signal_type, smoothing_window_seconds, output_reference_channel);
                 end
                 if exist('eegh', 'file')
                     EEGclean = eegh(com, EEGclean);
@@ -807,27 +802,6 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
             optimal_blend_gamma = alpha_blend;
             if ~silent_mode
                 disp([newline sprintf('Refined reference covariance using 2-pass linear blend (alpha = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
-            end
-            
-        elseif (ischar(prior_blend) || isstring(prior_blend)) && strcmpi(char(prior_blend), 'optimize')
-            % Load empirical EC centroid matched to current montage
-            C_EC = GEDAI_load_empirical_centroid(EEGavRef.chanlocs, prior_target_band, reference_mode);
-            if ~silent_mode
-                disp([newline 'Optimizing prior blending via fminbnd (maximizing SENSAI)...']);
-            end
-            [optimal_blend_gamma, best_sensai_val, refCOV] = GEDAI_bayesopt_prior(...
-                double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, ...
-                C_LF, C_EC, bayesopt_evals, ~silent_mode, visualize_artifacts, ...
-                artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, signal_type, smoothing_window_seconds, output_reference_channel, parallelize);
-        else
-            % Load empirical EC centroid matched to current montage
-            C_EC = GEDAI_load_empirical_centroid(EEGavRef.chanlocs, prior_target_band, reference_mode);
-            if isnumeric(prior_blend) && isscalar(prior_blend)
-                optimal_blend_gamma = max(0, min(1, double(prior_blend)));
-                if ~silent_mode
-                    disp([newline sprintf('Blending prior along geodesic with fixed gamma = %.3f (%s band)...', optimal_blend_gamma, prior_target_band)]);
-                end
-                refCOV = GEDAI_ewok_geodesic_blend(C_LF, C_EC, optimal_blend_gamma);
             end
         end
     catch blend_err
@@ -1333,13 +1307,9 @@ if ~ischar(ref_matrix_type)
     ref_matrix_type = 'custom';
 end
 if is_blended_requested
-    if isnumeric(prior_blend) && isscalar(prior_blend)
-        blend_com_str = num2str(prior_blend);
-    else
-        blend_com_str = ['''' char(prior_blend) ''''];
-    end
-    com = sprintf('EEG = GEDAI(EEG, %s, %s, %s, ''%s'', %d, %d, %s, %s, ''%s'', %s, ''%s'', ''prior_blend'', %s, ''prior_target_band'', ''%s'');', ...
-        threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel, blend_com_str, prior_target_band);
+    blend_com_str = ['''' char(prior_blend) ''''];
+    com = sprintf('EEG = GEDAI(EEG, %s, %s, %s, ''%s'', %d, %d, %s, %s, ''%s'', %s, ''%s'', ''prior_blend'', %s);', ...
+        threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds), output_reference_channel, blend_com_str);
 elseif isempty(output_reference_channel)
     com = sprintf('EEG = GEDAI(EEG, %s, %s,  %s, ''%s'', %d,  %d, %s, %s, ''%s'', %s);', ...
         threshold_com_str, num2str(epoch_size_in_cycles), num2str(lowcut_frequency), ref_matrix_type, parallelize, visualize_artifacts, num2str(ENOVA_threshold_per_epoch), num2str(original_channel_threshold), signal_type, num2str(smoothing_window_seconds));
@@ -1643,7 +1613,7 @@ EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
 EEGclean.etc.GEDAI.refCOV = refCOV;
 EEGclean.etc.GEDAI.prior_blend_gamma = optimal_blend_gamma;
-EEGclean.etc.GEDAI.prior_target_band = prior_target_band;
+EEGclean.etc.GEDAI.threshold_label = threshold_label;
 if exist('optimal_artifact_strength', 'var') && ~isnan(optimal_artifact_strength)
     EEGclean.etc.GEDAI.optimal_artifact_strength = optimal_artifact_strength;
 end
@@ -1666,7 +1636,7 @@ end
 % Uses 50% overlapping 1-second epochs for denser coverage in the scatter plot
 if visualize_artifacts && ~isempty(refCOV)
     vis_pcs = 3;
-    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
+    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, threshold_label, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
 
     % Store metrics in EEG.etc.GEDAI
     EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
@@ -1680,11 +1650,11 @@ if isempty(com)
     else
         blend_com_str = num2str(prior_blend);
     end
-    com = sprintf('EEG = GEDAI(EEG, %s, %g, %g, ''%s'', %d, %d, %g, %g, ''%s'', %g, ''%s'', ''prior_blend'', %s, ''prior_target_band'', ''%s'');', ...
+    com = sprintf('EEG = GEDAI(EEG, %s, %g, %g, ''%s'', %d, %d, %g, %g, ''%s'', %g, ''%s'', ''prior_blend'', %s);', ...
         threshold_com_str, epoch_size_in_cycles, lowcut_frequency, char(string(ref_matrix_type)), ...
         double(parallelize), double(visualize_artifacts), ENOVA_threshold_per_epoch, ...
         ENOVA_threshold_per_channel, signal_type, smoothing_window_seconds, output_reference_channel, ...
-        blend_com_str, prior_target_band);
+        blend_com_str);
 end
 
 % Add command history to EEGLAB structure
