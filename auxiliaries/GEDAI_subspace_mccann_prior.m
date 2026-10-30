@@ -1,35 +1,20 @@
-function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance] = GEDAI_subspace_mccann_prior(...
+function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance, C_broadband] = GEDAI_subspace_mccann_prior(...
     data, srate, ~, C_LF, reference_mode, lowcut_frequency, ~, signal_type, verbose)
-% GEDAI_SUBSPACE_MCCANN_PRIOR - Generative Semi-Blind Subspace McCann
-% leadfield tuning for GEDAI with Quiet-Epoch Screening, Lie-Algebra
-% Tangent Consensus, and Gain-Adaptive Band-Selective 3D Prior.
+% GEDAI_SUBSPACE_MCCANN_PRIOR - Closed-Form Exact Subspace McCann Geodesic
+% Leadfield Tuning for GEDAI with Smooth-Cortical Alpha Epoch Screening and
+% Band-Selective 3D Prior.
 %
-% Perturbs the theoretical leadfield prior strictly within the span of the
-% top K = 6 smooth cortical harmonic modes V_K via a low-rank McCann
-% displacement operator:
-%   T(theta) = I + V_K * (M_K(theta) - I_K) * V_K'
-%   C_trial(theta) = T(theta) * C0n * T(theta)'
-% where M_K(theta) = expm(H_K(theta)) is parameterized by 9 tangent
-% generators (3 spectral tilts + 6 off-diagonal couplings between modes
-% 1..3 and 4..6), while the bottom N - K high-spatial-frequency modes are
-% strictly frozen.
-%
-% Key Blind Tuning Mechanisms:
-%   1. Quiet-Epoch Screening & Active-Threshold Guardrail:
-%      Screens out the top 25% highest broadband-power burst epochs before
-%      evaluating 8-16 Hz calibration SENSAI (with minThreshold >= 0 so
-%      candidates cannot win via negative-threshold no-cleaning degeneracy).
-%   2. Lie-Algebra Hybrid Tangent Consensus:
-%      Combines the top candidate theta_argmax with the norm-matched
-%      quadratic-gain-weighted consensus of the top M = 8 tangent vectors
-%      in H_K(theta) before applying expm(H_K), suppressing single-candidate
-%      step-function noise.
-%   3. Gain-Adaptive Band-Selective 3D refCOV Tensor:
-%      Scales the physiological mid-band blending weight w_adapt in [0.25, 0.55]
-%      proportionally to the calibration SENSAI gain, adapts physiological
-%      mid-bands (1.5 - 25 Hz) with w_adapt, applies a graded low-delta
-%      weight (0.35 * w_adapt) to Band 7 (~1 - 2 Hz), and freezes outer
-%      bands at the unit-trace montage-projected anchor C0n.
+% Transports the theoretical leadfield prior strictly within the span of the
+% top K = min(9, max(6, floor(N / 3))) smooth cortical harmonic modes V_K
+% via the exact closed-form Bures-Wasserstein (McCann) optimal transport map:
+%   A = Lambda_K,  B = (trace(Lambda_K) / trace(S_emp_K)) * (V_K' * C_emp * V_K)
+%   T_AB = A^(-1/2) * (A^(1/2) * B * A^(1/2))^(1/2) * A^(-1/2)
+%   M_K(t) = (1 - t) * I_K + t * T_AB
+%   T(t)   = I_N + V_K * (M_K(t) - I_K) * V_K'
+%   C_K(t) = T(t) * C0n * T(t)'
+% while the bottom N - K high-spatial-frequency modes remain strictly frozen
+% at their anatomical eigenvalues, preventing any adaptation to focal muscle,
+% ocular, or single-electrode artifacts.
 %
 % Inputs:
 %   data                 - (nbchan x pnts) referenced EEG data (e.g. EEGavRef.data)
@@ -44,10 +29,11 @@ function [refCOV_3D, best_params, best_SENSAI, base_SENSAI, bw_distance] = GEDAI
 %
 % Outputs:
 %   refCOV_3D   - (nbchan x nbchan x num_bands) band-selective reference covariance tensor
-%   best_params - Selected 1x9 hybrid tangent parameter vector theta*
-%   best_SENSAI - Maximal 8-16 Hz SENSAI score (%) on screened calibration epochs
-%   base_SENSAI - Baseline leadfield 8-16 Hz SENSAI score (%) on screened calibration epochs
-%   bw_distance - Bures-Wasserstein distance between C0n and C_K(theta*)
+%   best_params - Selected geodesic step t_mccann in [0, 1]
+%   best_SENSAI - Maximal 8-13 Hz SENSAI score (%) on screened calibration epochs
+%   base_SENSAI - Baseline leadfield 8-13 Hz SENSAI score (%) on screened calibration epochs
+%   bw_distance - Bures-Wasserstein distance between C0n and C_K(t*)
+%   C_broadband - Broadband reference covariance matrix matched to the mid-band prior
 
 if nargin < 5 || isempty(reference_mode), reference_mode = 'AvgRef'; end
 if nargin < 6 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
@@ -56,196 +42,151 @@ if nargin < 9 || isempty(verbose), verbose = true; end
 
 data = double(data);
 [N, pnts] = size(data);
+orig_trace = max(trace(real((C_LF + C_LF') / 2)), 1e-12);
 
-% Subsample up to 180 seconds for fast calibration on long recordings
-max_cal_pnts = round(180 * srate);
-if pnts <= max_cal_pnts
-    cal_data = data;
-else
-    seg_len = round(30 * srate);
-    idx1 = 1:seg_len;
-    mid_start = round(pnts / 2 - seg_len / 2);
-    idx2 = mid_start:(mid_start + seg_len - 1);
-    idx3 = (pnts - seg_len + 1):pnts;
-    cal_data = [data(:, idx1), data(:, idx2), data(:, idx3)];
-end
-
-% Unit-trace theoretical leadfield prior
-C_LF = real((C_LF + C_LF') / 2);
-C_LF_n = C_LF / max(trace(C_LF), 1e-12);
-
-% Construct reference-matched anchor C0n and harmonic eigenbasis V0
-if strcmpi(reference_mode, 'AvgRef')
-    R_proj = eye(N) - ones(N) / N;
-    cal_data_proj = R_proj * cal_data;
-    C0n = (R_proj * C_LF_n * R_proj') / max(trace(R_proj * C_LF_n * R_proj'), 1e-12);
-else
-    cal_data_proj = cal_data;
-    C0n = C_LF_n;
-end
+% Unit-trace theoretical leadfield prior (already referenced in GEDAI.m)
+C0n = real((C_LF + C_LF') / 2) / orig_trace;
 
 [V_eig, D_eig] = eig(C0n);
 [lambda0, eig_order] = sort(max(real(diag(D_eig)), 0), 'descend');
 V0 = real(V_eig(:, eig_order));
 
-K = min(6, max(2, floor(N / 2)));
+K = min(9, max(6, floor(N / 3)));
+K = min(K, max(1, N - 2));
 V_K = V0(:, 1:K);
-Lambda_K = diag(lambda0(1:K));
+Lambda_K = diag(max(lambda0(1:K), 1e-12));
 
-% 1. Extract 8-16 Hz physiological mid-band calibration epochs & screen burst epochs
-[fb, fa] = butter(4, [8, min(16, 0.45 * srate)] / (srate / 2), 'bandpass');
-alpha_cal = filtfilt(fb, fa, cal_data_proj')';
+% 1. Extract 8-13 Hz physiological alpha/mu band across the recording
+f_lo = min(8.0, 0.30 * srate);
+f_hi = min(13.0, 0.45 * srate);
+if f_hi > f_lo + 0.5
+    [fb, fa] = butter(4, [f_lo, f_hi] / (srate / 2), 'bandpass');
+    alpha_cal = filtfilt(fb, fa, data')';
+else
+    alpha_cal = data;
+end
 
-epoch_len = round(srate);
+epoch_len = max(10, round(srate));
 n_epochs = floor(size(alpha_cal, 2) / epoch_len);
-best_params = zeros(1, 9);
-w_adapt = 0.50;
+t_mccann = 0.80;
 
-if n_epochs >= 2 && K >= 6
-    epoched = reshape(double(alpha_cal(:, 1:(n_epochs * epoch_len))), N, epoch_len, n_epochs);
-    epoched_bb = reshape(double(cal_data_proj(:, 1:(n_epochs * epoch_len))), N, epoch_len, n_epochs);
+if n_epochs >= 4 && K >= 3
+    epoched_al = reshape(double(alpha_cal(:, 1:(n_epochs * epoch_len))), N, epoch_len, n_epochs);
+    epoched_bb = reshape(double(data(:, 1:(n_epochs * epoch_len))), N, epoch_len, n_epochs);
     COV_tr = zeros(N, N, n_epochs);
-    bb_power = zeros(1, n_epochs);
+    alpha_pow = zeros(1, n_epochs);
+    bb_pow = zeros(1, n_epochs);
+    smooth_frac = zeros(1, n_epochs);
+
     for e = 1:n_epochs
-        cv = cov(epoched(:, :, e)');
-        COV_tr(:, :, e) = (cv + cv') / 2;
-        bb_power(e) = trace(cov(epoched_bb(:, :, e)'));
+        ca = cov(epoched_al(:, :, e)');
+        ca = (ca + ca') / 2;
+        COV_tr(:, :, e) = ca;
+        tr_a = max(trace(ca), 1e-12);
+        alpha_pow(e) = tr_a;
+        smooth_frac(e) = trace(V_K' * ca * V_K) / tr_a;
+        bb_pow(e) = trace(cov(epoched_bb(:, :, e)'));
     end
 
-    % Quiet-epoch screening: discard top 25% highest broadband artifact burst epochs
-    cutoff_bb = prctile(bb_power, 75);
-    keep_mask = bb_power <= cutoff_bb;
-    if sum(keep_mask) >= 6
-        COV_cal = COV_tr(:, :, keep_mask);
-    else
-        COV_cal = COV_tr;
+    % Screen for dipolar, high-alpha, non-burst epochs:
+    %   - Smoothness in top-K leadfield subspace >= median
+    %   - Alpha power >= median
+    %   - Exclude top 15% broadband artifact burst epochs
+    keep_mask = (smooth_frac >= prctile(smooth_frac, 50)) & ...
+                (alpha_pow   >= prctile(alpha_pow, 45)) & ...
+                (bb_pow      <= prctile(bb_pow, 85));
+    if sum(keep_mask) < 4
+        keep_mask = (smooth_frac >= prctile(smooth_frac, 40)) & (bb_pow <= prctile(bb_pow, 85));
+    end
+    if sum(keep_mask) < 2
+        keep_mask = true(1, n_epochs);
     end
 
-    % 2. Deterministic Trust-Region Design in K=6 Tangent Space (L_max = 0.22)
-    L_max = 0.22;
-    rs = RandStream('mt19937ar', 'Seed', 1);
-    P_cand = [zeros(1, 9); ...
-              0.6 * L_max * eye(9); ...
-             -0.6 * L_max * eye(9); ...
-              L_max * (2 * rand(rs, 60, 9) - 1)];
+    COV_cal = COV_tr(:, :, keep_mask);
+    C_alpha_emp = mean(COV_cal, 3);
+    C_alpha_emp = (C_alpha_emp + C_alpha_emp') / 2;
+    C_alpha_emp = C_alpha_emp / max(trace(C_alpha_emp), 1e-12);
 
-    num_cands = size(P_cand, 1);
-    scores = zeros(num_cands, 1);
+    % 2. Closed-Form Subspace McCann Transport Map on SPD(K)
+    S_emp_K = V_K' * C_alpha_emp * V_K;
+    S_emp_K = (S_emp_K + S_emp_K') / 2;
+    S_emp_K_scaled = S_emp_K * (trace(Lambda_K) / max(trace(S_emp_K), 1e-12));
 
-    for p_idx = 1:num_cands
-        C_c = make_subspace_candidate(C0n, V_K, Lambda_K, P_cand(p_idx, :));
-        scores(p_idx) = eval_midband_sensai(C_c, COV_cal, signal_type);
-    end
+    A_half = diag(sqrt(diag(Lambda_K)));
+    A_inv_half = diag(1 ./ sqrt(diag(Lambda_K)));
+    mid_mat = A_half * S_emp_K_scaled * A_half;
+    mid_mat = real((mid_mat + mid_mat') / 2);
+    [Vm, Dm] = eig(mid_mat);
+    mid_sqrt = real(Vm) * diag(sqrt(max(real(diag(Dm)), 0))) * real(Vm)';
+    T_AB = A_inv_half * mid_sqrt * A_inv_half;
 
-    base_SENSAI = scores(1);
-    gains = max(0, scores - base_SENSAI);
-    [sorted_gains, ord_g] = sort(gains, 'descend');
-    best_SENSAI = base_SENSAI + sorted_gains(1);
-
-    if sorted_gains(1) > 0
-        % Lie-Algebra Hybrid Tangent Consensus (50% Argmax + 50% Top-8 Norm-Matched Consensus)
-        M8 = min(8, num_cands);
-        w8 = sorted_gains(1:M8).^2;
-        w8 = w8 / max(sum(w8), 1e-12);
-        th_8 = sum(P_cand(ord_g(1:M8), :) .* w8, 1);
-        target_norm = mean(vecnorm(P_cand(ord_g(1:3), :), 2, 2));
-        if norm(th_8) > 1e-6
-            th_8 = th_8 * (target_norm / norm(th_8));
-        end
-        th_arg = P_cand(ord_g(1), :);
-        best_params = 0.5 * th_arg + 0.5 * th_8;
-        C_K = make_subspace_candidate(C0n, V_K, Lambda_K, best_params);
-        w_adapt = min(0.55, max(0.25, 0.50 * (sorted_gains(1) / 5.0)));
-    else
-        best_SENSAI = base_SENSAI;
-        C_K = C0n;
-        w_adapt = 0;
-    end
+    % Evaluate baseline and geodesic step t_mccann = 0.80
+    base_SENSAI = eval_midband_sensai(C0n, COV_cal, signal_type);
+    M_K = (1 - t_mccann) * eye(K) + t_mccann * T_AB;
+    T_op = eye(N) + V_K * (M_K - eye(K)) * V_K';
+    C_K = T_op * C0n * T_op';
+    C_K = real((C_K + C_K') / 2);
+    C_K = C_K / max(trace(C_K), 1e-12);
+    best_SENSAI = eval_midband_sensai(C_K, COV_cal, signal_type);
+    best_params = t_mccann;
 else
     base_SENSAI = NaN;
     best_SENSAI = NaN;
     C_K = C0n;
-    w_adapt = 0;
+    t_mccann = 0;
+    best_params = 0;
 end
 
 bw_distance = compute_bures_distance(C0n, C_K);
 
-% 3. Construct Gain-Adaptive Band-Selective 3D refCOV Tensor
+% 3. Construct Band-Selective 3D refCOV Tensor & Matched Broadband Prior
 num_wavelet_bands = max(6, min(ceil(log2(srate / lowcut_frequency)), floor(log2(pnts))));
 lower_freqs = srate ./ (2.^(2:(num_wavelet_bands + 1)));
 upper_freqs = srate ./ (2.^(1:num_wavelet_bands));
-center_freqs = (lower_freqs + upper_freqs) / 2;
 
 lowest_to_exclude = sum(upper_freqs <= lowcut_frequency);
-n_total_bands = max(8, num_wavelet_bands - lowest_to_exclude);
-refCOV_3D = repmat(C0n, 1, 1, n_total_bands);
-adapt_bands = find(center_freqs(1:n_total_bands) >= 1.5 & center_freqs(1:n_total_bands) <= 25.0);
-if isempty(adapt_bands)
-    adapt_bands = intersect(3:6, 1:n_total_bands);
-end
+n_total_bands = max(6, num_wavelet_bands - lowest_to_exclude);
 
-if w_adapt > 0
-    C_mid = w_adapt * C_K + (1 - w_adapt) * C0n;
-    C_mid = C_mid / max(trace(C_mid), 1e-12);
-    for idx_b = 1:numel(adapt_bands)
-        f = adapt_bands(idx_b);
-        refCOV_3D(:, :, f) = C_mid;
+C0_scaled = C0n * orig_trace;
+CK_scaled = C_K * orig_trace;
+
+refCOV_3D = repmat(C0_scaled, 1, 1, n_total_bands);
+for f = 1:n_total_bands
+    fl = lower_freqs(f);
+    fu = upper_freqs(f);
+    % Full McCann protection in alpha/theta-alpha overlap bands (e.g. 6-13 Hz)
+    if fl < 13.0 && fu > 6.0
+        w_f = 1.00;
+    % Graded protection in adjacent beta/theta bands (3-25 Hz)
+    elseif fl < 25.0 && fu > 3.0
+        w_f = 0.60;
+    % Keep high-frequency (>25 Hz) and sub-delta (<3 Hz) anchored to C_LF
+    else
+        w_f = 0.00;
     end
-
-    % Graded low-delta adaptation in Band 7 (~0.98 - 1.95 Hz)
-    low_delta_band = max(adapt_bands) + 1;
-    if low_delta_band <= n_total_bands
-        w_low = 0.35 * w_adapt;
-        C_low = w_low * C_K + (1 - w_low) * C0n;
-        C_low = C_low / max(trace(C_low), 1e-12);
-        refCOV_3D(:, :, low_delta_band) = C_low;
-    end
-end
-
-% Apply GEDAI's internal average-reference operator R_np1 = I - 1/(N+1)*1*1'
-% on the unit-trace band matrices so native ('AvgRef') and custom ('None') calls match.
-if strcmpi(reference_mode, 'AvgRef')
-    R_np1 = eye(N) - ones(N) / (N + 1);
-    for b = 1:size(refCOV_3D, 3)
-        refCOV_3D(:, :, b) = R_np1 * refCOV_3D(:, :, b) * R_np1';
-        refCOV_3D(:, :, b) = real((refCOV_3D(:, :, b) + refCOV_3D(:, :, b)') / 2);
+    if w_f > 0
+        C_f = (1 - w_f) * C0_scaled + w_f * CK_scaled;
+        C_f = real((C_f + C_f') / 2);
+        refCOV_3D(:, :, f) = C_f * (orig_trace / max(trace(C_f), 1e-12));
     end
 end
+
+C_broadband = CK_scaled;
 
 if verbose
-    fprintf('\n=== GEDAI: Generative Semi-Blind McCann Tuning (K = %d/%d modes) ===\n', K, N);
-    fprintf('  Baseline 8-16 Hz SENSAI:    %+.2f %%\n', base_SENSAI);
-    fprintf('  Tuned 8-16 Hz SENSAI:       %+.2f %% (BW dist = %.4f, w_adapt = %.2f)\n', best_SENSAI, bw_distance, w_adapt);
-    fprintf('  Band-Selective 3D Prior:    Adapted bands [%s] + graded low-delta, Frozen outer bands (C0n anchor)\n', num2str(adapt_bands));
-    fprintf('===================================================================\n');
+    fprintf('\n=== GEDAI: Closed-Form Subspace McCann Geodesic (K = %d/%d modes, t = %.2f) ===\n', K, N, t_mccann);
+    fprintf('  Baseline 8-13 Hz SENSAI:    %+.2f %%\n', base_SENSAI);
+    fprintf('  Tuned 8-13 Hz SENSAI:       %+.2f %% (BW dist = %.4f)\n', best_SENSAI, bw_distance);
+    fprintf('=============================================================================\n');
 end
 
-end
-
-function C_cand = make_subspace_candidate(C0n, V_K, Lambda_K, theta)
-N = size(C0n, 1);
-K = size(V_K, 2);
-H = diag([theta(1:3), -theta(1:3)]);
-H(1, 4) = theta(4); H(4, 1) = theta(4);
-H(2, 5) = theta(5); H(5, 2) = theta(5);
-H(3, 6) = theta(6); H(6, 3) = theta(6);
-H(1, 5) = theta(7); H(5, 1) = theta(7);
-H(2, 4) = theta(8); H(4, 2) = theta(8);
-H(1, 6) = theta(9); H(6, 1) = theta(9);
-
-M_K = expm(H);
-top_cov = M_K * Lambda_K * M_K';
-M_K = sqrt(trace(Lambda_K) / max(trace(top_cov), 1e-12)) * M_K;
-T = eye(N) + V_K * (M_K - eye(K)) * V_K';
-C_cand = T * C0n * T';
-C_cand = (C_cand + C_cand') / 2;
-C_cand = C_cand / max(trace(C_cand), 1e-12);
 end
 
 function score = eval_midband_sensai(refCOV, COV, signal_type)
 N = size(refCOV, 1);
 reg_lambda = 0.05;
-refCOV_reg = (1 - reg_lambda) * refCOV + reg_lambda * (1 / N) * eye(N);
+refCOV_reg = (1 - reg_lambda) * refCOV + reg_lambda * (trace(refCOV) / N) * eye(N);
+refCOV_reg = real((refCOV_reg + refCOV_reg') / 2);
 [V, D] = eig(refCOV_reg);
 [~, order] = sort(real(diag(D)), 'descend');
 top_pcs = min(3, N);
@@ -257,7 +198,6 @@ Eval = zeros(N, N, n_epochs);
 for e = 1:n_epochs
     [Evec(:, :, e), Eval(:, :, e)] = eig(COV(:, :, e), refCOV_reg, 'chol');
 end
-% Active-regime lower bound minThreshold = 0 prevents negative-threshold no-cleaning degeneracy
 [~, score] = SENSAI_fminbnd(0, 12, refCOV, Eval, Evec, 3, COV, template, signal_type, top_pcs);
 end
 

@@ -480,19 +480,8 @@ if ENOVA_threshold_per_channel < inf
                 is_blended_requested = false;
             end
 
-            % Create refCOV for full channel space
+            % Create anatomical refCOV for full channel space visualization
             refCOV_full = GEDAI_create_refCOV(ref_matrix_type, EEGin, EEGavRef_for_vis, signal_type, internal_reference);
-            if is_blended_requested && strcmp(signal_type, 'eeg') && ~isempty(refCOV_full)
-                try
-                    if (ischar(prior_blend) || isstring(prior_blend)) && ...
-                            (contains(lower(char(prior_blend)), 'mccann') || contains(lower(char(prior_blend)), 'semiblind'))
-                        refCOV_full = GEDAI_subspace_mccann_prior(double(EEGavRef_for_vis.data), ...
-                            EEGavRef_for_vis.srate, EEGavRef_for_vis.chanlocs, refCOV_full, ...
-                            reference_mode, lowcut_frequency, epoch_size_in_cycles, signal_type, false);
-                    end
-                catch
-                end
-            end
 
             if ~isempty(refCOV_full)
                 vis_pcs = 3;
@@ -640,17 +629,18 @@ end
 if is_blended_requested && strcmp(signal_type, 'eeg')
     try
         C_LF = refCOV;
+        refCOV_broadband_override = [];
         
         if is_subspace_mccann_requested
-            % Generative Semi-Blind Band-Selective Subspace McCann Leadfield Tuning
+            % Closed-Form Subspace McCann Geodesic Leadfield Tuning
             if ~silent_mode
-                disp([newline 'Executing Generative Semi-Blind McCann Leadfield Tuning (K=6, Band-Selective 3D Prior)...']);
+                disp([newline 'Executing Closed-Form Subspace McCann Leadfield Tuning (Band-Selective 3D Prior)...']);
             end
-            [refCOV, ~, ~, ~, optimal_blend_gamma] = GEDAI_subspace_mccann_prior(...
+            [refCOV, ~, ~, ~, optimal_blend_gamma, refCOV_broadband_override] = GEDAI_subspace_mccann_prior(...
                 double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, ...
                 C_LF, reference_mode, lowcut_frequency, epoch_size_in_cycles, signal_type, ~silent_mode);
         elseif is_option4_requested
-            % Option 4: 2-Pass ENOVA < 10% Epoch Selection & 9 Band-Specific Covariance Blending
+            % Option 4: 2-Pass Low-ENOVA Epoch Selection & Band-Specific Subspace-Projected Blending
             if ~silent_mode
                 disp([newline 'Executing Option 4: Running anatomy-only baseline GEDAI...']);
             end
@@ -661,6 +651,7 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
                 signal_type, smoothing_window_seconds, output_reference_channel, 'prior_blend', 'off', pass0_opts);
             
             orig_data = double(EEGavRef.data);
+            d0_opt4 = double(EEG_clean0.data);
             noise0 = double(EEG_art0.data);
             epoch_len = round(EEGavRef.srate * 1); % 1-second epochs
             n_epochs = floor(size(orig_data, 2) / epoch_len);
@@ -674,11 +665,17 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
             end
             
             qual_idx = find(enova_all < 0.10);
+            if length(qual_idx) < 10 && n_epochs >= 2
+                % Adaptive lowest-25% ENOVA fallback when global baseline ENOVA > 10%
+                [~, ord_enova] = sort(enova_all, 'ascend');
+                n_fallback = min(n_epochs, max(10, ceil(0.25 * n_epochs)));
+                qual_idx = sort(ord_enova(1:n_fallback));
+            end
             n = length(qual_idx);
             
-            if n < 10
+            if n < 2
                 if ~silent_mode
-                    disp([newline sprintf('Option 4: Fewer than 10 epochs qualify with ENOVA < 10%% (n = %d < 10). Retaining baseline output.', n)]);
+                    disp([newline sprintf('Option 4: Insufficient epochs (n = %d). Retaining baseline output.', n)]);
                 end
                 EEGclean = EEG_clean0;
                 EEGartifacts = EEG_art0;
@@ -709,20 +706,97 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
                     qual_samples = [qual_samples, (qual_idx(k) - 1) * epoch_len + (1:epoch_len)];
                 end
                 
+                N_ch = size(C_LF, 1);
+                [V_lf, D_lf] = eig(real((C_LF + C_LF') / 2));
+                [lam_lf, ord_lf] = sort(max(real(diag(D_lf)), 0), 'descend');
+                K_sub = min(9, max(6, floor(N_ch / 3)));
+                K_sub = min(K_sub, max(1, N_ch - 2));
+                V_K = real(V_lf(:, ord_lf(1:K_sub)));
+                Lambda_K = diag(max(lam_lf(1:K_sub), 1e-12));
+                A_half = diag(sqrt(diag(Lambda_K)));
+                A_inv_half = diag(1 ./ sqrt(diag(Lambda_K)));
+                
                 actual_decomp_level = max(1, ceil(log2(EEGavRef.srate / lowcut_frequency)) - 1);
                 n_wavelet_bands = actual_decomp_level + 1;
-                w = 0.5 * n / (n + 10);
+                lower_freqs_opt4 = EEGavRef.srate ./ (2.^(2:(n_wavelet_bands + 1)));
+                upper_freqs_opt4 = EEGavRef.srate ./ (2.^(1:n_wavelet_bands));
+                w = 0.85 * n / (n + 10);
                 
-                C_band = zeros(size(C_LF, 1), size(C_LF, 2), n_wavelet_bands);
+                C_band = repmat(C_LF, 1, 1, n_wavelet_bands);
                 for f = 1:n_wavelet_bands
-                    band_sig = stateful_modwt_single_band(orig_data', 'haar', actual_decomp_level, f)';
-                    band_qual = band_sig(:, qual_samples);
-                    C_emp_f = cov(band_qual');
-                    C_emp_f = (C_emp_f + C_emp_f') / 2;
-                    scale_f = trace(C_LF) / max(trace(C_emp_f), 1e-12);
-                    C_scaled_f = C_emp_f * scale_f;
-                    C_band(:,:,f) = (1 - w) * C_LF + w * C_scaled_f;
-                    C_band(:,:,f) = real((C_band(:,:,f) + C_band(:,:,f)') / 2);
+                    fl_f = lower_freqs_opt4(f);
+                    fu_f = upper_freqs_opt4(f);
+                    if fl_f < 25.0 && fu_f > 3.0
+                        band_sig = stateful_modwt_single_band(orig_data', 'haar', actual_decomp_level, f)';
+                        band_qual = band_sig(:, qual_samples);
+                        C_emp_f = cov(band_qual');
+                        C_emp_f = (C_emp_f + C_emp_f') / 2;
+                        S_emp_K = V_K' * C_emp_f * V_K;
+                        S_emp_K = real((S_emp_K + S_emp_K') / 2);
+                        S_emp_K = S_emp_K * (trace(Lambda_K) / max(trace(S_emp_K), 1e-12));
+                        mid_mat = real((A_half * S_emp_K * A_half + (A_half * S_emp_K * A_half)') / 2);
+                        [Vm, Dm] = eig(mid_mat);
+                        T_AB = A_inv_half * (real(Vm) * diag(sqrt(max(real(diag(Dm)), 0))) * real(Vm)') * A_inv_half;
+                        w_f = w;
+                        if ~(fl_f < 13.0 && fu_f > 6.0)
+                            w_f = 0.65 * w;
+                        end
+                        M_K = (1 - w_f) * eye(K_sub) + w_f * T_AB;
+                        T_op = eye(N_ch) + V_K * (M_K - eye(K_sub)) * V_K';
+                        C_f = T_op * C_LF * T_op';
+                        C_f = real((C_f + C_f') / 2);
+                        C_band(:,:,f) = C_f * (trace(C_LF) / max(trace(C_f), 1e-12));
+                    end
+                end
+                
+                % Broadband override using the 8-13 Hz alpha band McCann prior on smooth cortical epochs
+                f_lo_bb = min(8.0, 0.30 * EEGavRef.srate);
+                f_hi_bb = min(13.0, 0.45 * EEGavRef.srate);
+                if f_hi_bb > f_lo_bb + 0.5
+                    [fb4, fa4] = butter(4, [f_lo_bb, f_hi_bb] / (EEGavRef.srate / 2), 'bandpass');
+                    alpha_sig4 = filtfilt(fb4, fa4, orig_data')';
+                    al_pow4 = zeros(1, n_epochs);
+                    sm_frac4 = zeros(1, n_epochs);
+                    bb_pow4 = zeros(1, n_epochs);
+                    for e = 1:n_epochs
+                        idx_e = (e - 1) * epoch_len + (1:epoch_len);
+                        ca4 = cov(alpha_sig4(:, idx_e)');
+                        ca4 = (ca4 + ca4') / 2;
+                        tr4 = max(trace(ca4), 1e-12);
+                        al_pow4(e) = tr4;
+                        sm_frac4(e) = trace(V_K' * ca4 * V_K) / tr4;
+                        bb_pow4(e) = trace(cov(orig_data(:, idx_e)'));
+                    end
+                    mask_al4 = (sm_frac4 >= prctile(sm_frac4, 50)) & (al_pow4 >= prctile(al_pow4, 45)) & (bb_pow4 <= prctile(bb_pow4, 85));
+                    if sum(mask_al4) >= 4
+                        al_samples4 = [];
+                        for e = find(mask_al4)
+                            al_samples4 = [al_samples4, (e - 1) * epoch_len + (1:epoch_len)];
+                        end
+                        C_emp_al = cov(alpha_sig4(:, al_samples4)');
+                    else
+                        C_emp_al = cov(alpha_sig4(:, qual_samples)');
+                    end
+                else
+                    C_emp_al = cov(orig_data(:, qual_samples)');
+                end
+                C_emp_al = (C_emp_al + C_emp_al') / 2;
+                S_al_K = V_K' * C_emp_al * V_K;
+                S_al_K = real((S_al_K + S_al_K') / 2);
+                S_al_K = S_al_K * (trace(Lambda_K) / max(trace(S_al_K), 1e-12));
+                mid_al = real((A_half * S_al_K * A_half + (A_half * S_al_K * A_half)') / 2);
+                [Vm_al, Dm_al] = eig(mid_al);
+                T_AB_al = A_inv_half * (real(Vm_al) * diag(sqrt(max(real(diag(Dm_al)), 0))) * real(Vm_al)') * A_inv_half;
+                M_K_al = (1 - w) * eye(K_sub) + w * T_AB_al;
+                T_op_al = eye(N_ch) + V_K * (M_K_al - eye(K_sub)) * V_K';
+                C_bb_al = T_op_al * C_LF * T_op_al';
+                C_bb_al = real((C_bb_al + C_bb_al') / 2);
+                refCOV_broadband_override = C_bb_al * (trace(C_LF) / max(trace(C_bb_al), 1e-12));
+                % Also assign C_bb_al to the alpha wavelet band so active posterior alpha is protected
+                for f = 1:n_wavelet_bands
+                    if lower_freqs_opt4(f) < 13.0 && upper_freqs_opt4(f) > 6.0
+                        C_band(:,:,f) = refCOV_broadband_override;
+                    end
                 end
                 
                 refCOV = C_band;
@@ -733,7 +807,7 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
             end
             
         elseif is_2pass_requested
-            % Option 3: 2-Pass GEDAI with linear blending
+            % Option 3: 2-Pass GEDAI with smooth-subspace linear blending
             if ~silent_mode
                 disp([newline 'Executing Pass 0 baseline denoising for 2-pass linear prior blending...']);
             end
@@ -746,62 +820,121 @@ if is_blended_requested && strcmp(signal_type, 'eeg')
             
             d0 = double(EEG_clean0.data);
             
-            if contains(str_blend_lower, 'top75')
-                % Advanced: Top 75% highest SENSAI score epochs
+            % Extract physiological alpha/mu band (8-13 Hz) from orig_data + d0 so posterior alpha removed in Pass 0 is recovered
+            orig_opt3 = double(EEGavRef.data);
+            srate_opt3 = EEGavRef.srate;
+            f_lo_opt3 = min(8.0, 0.30 * srate_opt3);
+            f_hi_opt3 = min(13.0, 0.45 * srate_opt3);
+            if f_hi_opt3 > f_lo_opt3 + 0.5
+                [fb3, fa3] = butter(4, [f_lo_opt3, f_hi_opt3] / (srate_opt3 / 2), 'bandpass');
+                d0_osc = filtfilt(fb3, fa3, orig_opt3')';
+            else
+                d0_osc = d0;
+            end
+            
+            N_ch = size(C_LF, 1);
+            [V_lf, D_lf] = eig(real((C_LF + C_LF') / 2));
+            [lam_lf, ord_lf] = sort(max(real(diag(D_lf)), 0), 'descend');
+            K_sub = min(9, max(6, floor(N_ch / 3)));
+            K_sub = min(K_sub, max(1, N_ch - 2));
+            V_K = real(V_lf(:, ord_lf(1:K_sub)));
+            
+            epoch_len = round(EEGavRef.srate * 1); % 1-second epochs
+            n_epochs = floor(size(d0, 2) / epoch_len);
+            if n_epochs >= 4
+                al_pow3 = zeros(1, n_epochs);
+                sm_frac3 = zeros(1, n_epochs);
+                bb_pow3 = zeros(1, n_epochs);
+                epoch_sensai = zeros(1, n_epochs);
                 noise0 = double(EEG_art0.data);
-                epoch_len = round(EEGavRef.srate * 1); % 1-second epochs
-                n_epochs = floor(size(d0, 2) / epoch_len);
-                
-                if n_epochs >= 2
-                    [Vref, Dref] = eig(C_LF);
-                    [~, si] = sort(diag(Dref), 'descend');
-                    top_pcs = min(3, size(Vref, 2));
-                    bref = Vref(:, si(1:top_pcs));
+                top_pcs = min(3, N_ch);
+                bref = V_K(:, 1:top_pcs);
+                for e = 1:n_epochs
+                    idx_e = (e - 1) * epoch_len + (1:epoch_len);
+                    ca3 = cov(d0_osc(:, idx_e)');
+                    ca3 = (ca3 + ca3') / 2;
+                    tr3 = max(trace(ca3), 1e-12);
+                    al_pow3(e) = tr3;
+                    sm_frac3(e) = trace(V_K' * ca3 * V_K) / tr3;
+                    bb_pow3(e) = trace(cov(orig_opt3(:, idx_e)'));
                     
-                    epoch_sensai = zeros(1, n_epochs);
-                    for e = 1:n_epochs
-                        idx_e = (e - 1) * epoch_len + (1:epoch_len);
-                        c_s = cov(d0(:, idx_e)');
-                        c_s = (c_s + c_s') / 2;
-                        [Vs, Ds] = eig(c_s);
-                        [~, s_idx] = sort(diag(Ds), 'descend');
-                        bs = Vs(:, s_idx(1:top_pcs));
-                        
-                        c_n = cov(noise0(:, idx_e)');
-                        c_n = (c_n + c_n') / 2;
-                        [Vn, Dn] = eig(c_n);
-                        [~, n_idx] = sort(diag(Dn), 'descend');
-                        bn = Vn(:, n_idx(1:top_pcs));
-                        
-                        ssi = prod(subspace_angles(bs, bref));
-                        nsi = prod(subspace_angles(bn, bref));
-                        epoch_sensai(e) = 100 * ssi - 0.5 * 100 * nsi;
-                    end
-                    
-                    [~, rank_idx] = sort(epoch_sensai, 'descend');
-                    n_keep = max(1, ceil(0.75 * n_epochs));
-                    keep_samples = [];
-                    for k = 1:n_keep
-                        keep_samples = [keep_samples, (rank_idx(k) - 1) * epoch_len + (1:epoch_len)];
-                    end
-                    C_clean = cov(d0(:, keep_samples)');
+                    c_s = cov(d0(:, idx_e)');
+                    c_s = (c_s + c_s') / 2;
+                    [Vs, Ds] = eig(c_s);
+                    [~, s_idx] = sort(diag(Ds), 'descend');
+                    bs = Vs(:, s_idx(1:top_pcs));
+                    c_n = cov(noise0(:, idx_e)');
+                    c_n = (c_n + c_n') / 2;
+                    [Vn, Dn] = eig(c_n);
+                    [~, n_idx] = sort(diag(Dn), 'descend');
+                    bn = Vn(:, n_idx(1:top_pcs));
+                    epoch_sensai(e) = 100 * prod(subspace_angles(bs, bref)) - 0.5 * 100 * prod(subspace_angles(bn, bref));
+                end
+                if contains(str_blend_lower, 'top75')
+                    % Combine Top 75% SENSAI with smooth dipolar alpha epochs
+                    sensai_cut = prctile(epoch_sensai, 25);
+                    mask3 = (epoch_sensai >= sensai_cut | sm_frac3 >= prctile(sm_frac3, 50)) & ...
+                            (al_pow3 >= prctile(al_pow3, 45)) & (bb_pow3 <= prctile(bb_pow3, 85));
                 else
-                    C_clean = cov(d0');
+                    mask3 = (sm_frac3 >= prctile(sm_frac3, 45)) & (bb_pow3 <= prctile(bb_pow3, 85));
+                end
+                if sum(mask3) >= 2
+                    keep_samples = [];
+                    for e = find(mask3)
+                        keep_samples = [keep_samples, (e - 1) * epoch_len + (1:epoch_len)];
+                    end
+                    C_clean = cov(d0_osc(:, keep_samples)');
+                else
+                    C_clean = cov(d0_osc');
                 end
             else
-                C_clean = cov(d0');
+                C_clean = cov(d0_osc');
             end
             
             C_clean = (C_clean + C_clean') / 2;
-            scale = trace(C_LF) / max(trace(C_clean), 1e-12);
-            C_scaled = C_clean * scale;
+            % Transport C_LF toward C_clean within top-K smooth cortical modes and freeze bottom N-K modes
+            Lambda_K = diag(max(lam_lf(1:K_sub), 1e-12));
+            S_emp_K = V_K' * C_clean * V_K;
+            S_emp_K = real((S_emp_K + S_emp_K') / 2);
+            S_emp_K = S_emp_K * (trace(Lambda_K) / max(trace(S_emp_K), 1e-12));
+            A_half = diag(sqrt(diag(Lambda_K)));
+            A_inv_half = diag(1 ./ sqrt(diag(Lambda_K)));
+            mid_mat = real((A_half * S_emp_K * A_half + (A_half * S_emp_K * A_half)') / 2);
+            [Vm, Dm] = eig(mid_mat);
+            T_AB = A_inv_half * (real(Vm) * diag(sqrt(max(real(diag(Dm)), 0))) * real(Vm)') * A_inv_half;
             
-            alpha_blend = 0.50;
-            refCOV = (1 - alpha_blend) * C_LF + alpha_blend * C_scaled;
-            refCOV = real((refCOV + refCOV') / 2);
+            if contains(str_blend_lower, 'top75')
+                alpha_blend = 0.75;
+            else
+                alpha_blend = 0.65;
+            end
+            M_K = (1 - alpha_blend) * eye(K_sub) + alpha_blend * T_AB;
+            T_op = eye(N_ch) + V_K * (M_K - eye(K_sub)) * V_K';
+            C_opt3 = T_op * C_LF * T_op';
+            C_opt3 = real((C_opt3 + C_opt3') / 2);
+            C_opt3 = C_opt3 * (trace(C_LF) / max(trace(C_opt3), 1e-12));
+            
+            % Construct band-selective 3D refCOV so >25 Hz and <3 Hz stay anchored to C_LF
+            actual_decomp_level = max(1, ceil(log2(srate_opt3 / lowcut_frequency)) - 1);
+            n_wavelet_bands = actual_decomp_level + 1;
+            lower_freqs_opt3 = srate_opt3 ./ (2.^(2:(n_wavelet_bands + 1)));
+            upper_freqs_opt3 = srate_opt3 ./ (2.^(1:n_wavelet_bands));
+            C_band3 = repmat(C_LF, 1, 1, n_wavelet_bands);
+            for f = 1:n_wavelet_bands
+                fl_f = lower_freqs_opt3(f);
+                fu_f = upper_freqs_opt3(f);
+                if fl_f < 13.0 && fu_f > 6.0
+                    C_band3(:, :, f) = C_opt3;
+                elseif fl_f < 25.0 && fu_f > 3.0
+                    C_mid3 = 0.60 * C_opt3 + 0.40 * C_LF;
+                    C_band3(:, :, f) = C_mid3 * (trace(C_LF) / max(trace(C_mid3), 1e-12));
+                end
+            end
+            refCOV = C_band3;
+            refCOV_broadband_override = C_opt3;
             optimal_blend_gamma = alpha_blend;
             if ~silent_mode
-                disp([newline sprintf('Refined reference covariance using 2-pass linear blend (alpha = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
+                disp([newline sprintf('Refined reference covariance using 2-pass smooth-subspace linear blend (alpha = %.2f). Proceeding to Pass 1 final denoising...', alpha_blend)]);
             end
         end
     catch blend_err
@@ -954,7 +1087,9 @@ if strcmpi(signal_type, 'meg')
 else
     broadband_maxThreshold = 12;
 end
-if ndims(refCOV) == 3
+if exist('refCOV_broadband_override', 'var') && ~isempty(refCOV_broadband_override)
+    refCOV_broadband = refCOV_broadband_override;
+elseif ndims(refCOV) == 3
     refCOV_broadband = mean(refCOV, 3);
 else
     refCOV_broadband = refCOV;
@@ -1246,7 +1381,7 @@ if ENOVA_threshold_per_epoch < inf
     if ~isempty(precomputed_ENOVA_per_epoch)
         ENOVA_per_epoch = precomputed_ENOVA_per_epoch;
     else
-        [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch_internal] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, sensai_epoch_size, refCOV, noise_multiplier, signal_type);
+        [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch_internal] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, sensai_epoch_size, C_LF, noise_multiplier, signal_type);
         ENOVA_per_epoch = ENOVA_per_epoch_internal;
     end
 else
@@ -1460,8 +1595,8 @@ if ~isempty(regions)
     end
 end
 
-% Calculate final SENSAI score (after potential epoch rejection)
-refCOV_eval = refCOV;
+% Calculate final SENSAI score (after potential epoch rejection) against anatomical reference C_LF
+refCOV_eval = C_LF;
 [SENSAI_score, ~, ~, mean_ENOVA, ENOVA_per_epoch] = SENSAI_basic(double(EEGclean.data), double(EEGartifacts.data), EEGavRef.srate, 1, refCOV_eval, noise_multiplier, signal_type);
 
 % disp([newline 'SENSAI score: ' num2str(round(SENSAI_score, 2, 'significant'))]);
@@ -1634,9 +1769,9 @@ end
 
 % --- Manifold Classification (Broadband) BEFORE & AFTER Cleaning ---
 % Uses 50% overlapping 1-second epochs for denser coverage in the scatter plot
-if visualize_artifacts && ~isempty(refCOV)
+if visualize_artifacts && ~isempty(C_LF)
     vis_pcs = 3;
-    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, refCOV, sensai_epoch_size, signal_type, vis_pcs, threshold_label, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
+    visualization_metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, C_LF, sensai_epoch_size, signal_type, vis_pcs, threshold_label, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel);
 
     % Store metrics in EEG.etc.GEDAI
     EEGclean.etc.GEDAI.visualization_metrics = visualization_metrics;
