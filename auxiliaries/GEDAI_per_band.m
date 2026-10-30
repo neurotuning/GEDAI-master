@@ -271,7 +271,7 @@ if ~isinf(smoothing_window_seconds)
         end
         
         chunk_threshold = artifact_threshold_array(c_start:c_end);
-        [cleaned_chunk, artifacts_chunk, artifact_threshold_out] = clean_EEG(EEGdata_epoched_chunk, srate, epoch_size, chunk_threshold, refCOV, Eval_chunk, Evec_chunk, cosine_weights, signal_type, c_start, N_epochs);
+        [cleaned_chunk, artifacts_chunk, artifact_threshold_out] = clean_EEG(EEGdata_epoched_chunk, srate, epoch_size, chunk_threshold, refCOV, Eval_chunk, Evec_chunk, cosine_weights, signal_type, c_start, N_epochs, minThreshold);
         
         cleaned_data_1(:, chunk_samples_start:chunk_samples_end) = cleaned_chunk;
         artifacts_data_1(:, chunk_samples_start:chunk_samples_end) = artifacts_chunk;
@@ -412,7 +412,7 @@ if ~isinf(smoothing_window_seconds)
         end
         
         chunk_threshold = artifact_threshold_2(c_start:c_end);
-        [cleaned_chunk, artifacts_chunk] = clean_EEG(EEGdata_epoched_chunk, srate, epoch_size, chunk_threshold, refCOV, Eval_chunk, Evec_chunk, cosine_weights, signal_type, c_start, N_epochs - 1);
+        [cleaned_chunk, artifacts_chunk] = clean_EEG(EEGdata_epoched_chunk, srate, epoch_size, chunk_threshold, refCOV, Eval_chunk, Evec_chunk, cosine_weights, signal_type, c_start, N_epochs - 1, minThreshold);
         
         cleaned_data_2(:, chunk_samples_start:chunk_samples_end) = cleaned_chunk;
         artifacts_data_2(:, chunk_samples_start:chunk_samples_end) = artifacts_chunk;
@@ -679,8 +679,8 @@ else
         artifact_threshold_2 = artifact_threshold; % Fallback for 1-epoch edge case
     end
     
-    [cleaned_data_1, artifacts_data_1, artifact_threshold_out] = clean_EEG(EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec, cosine_weights, signal_type);
-    [cleaned_data_2, artifacts_data_2, ~] = clean_EEG(EEGdata_epoched_2, srate, epoch_size, artifact_threshold_2, refCOV, Eval_2, Evec_2, cosine_weights, signal_type);
+    [cleaned_data_1, artifacts_data_1, artifact_threshold_out] = clean_EEG(EEGdata_epoched, srate, epoch_size, artifact_threshold, refCOV, Eval, Evec, cosine_weights, signal_type, 1, N_epochs, minThreshold);
+    [cleaned_data_2, artifacts_data_2, ~] = clean_EEG(EEGdata_epoched_2, srate, epoch_size, artifact_threshold_2, refCOV, Eval_2, Evec_2, cosine_weights, signal_type, 1, N_epochs - 1, minThreshold);
     
     % Clear Stream 2 inputs as they are no longer needed
     clear EEGdata_epoched_2 Evec_2 Eval_2 COV_2;
