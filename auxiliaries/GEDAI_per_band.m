@@ -814,7 +814,7 @@ if minThreshold == -4
     scale_factor = double(N_chans) / (M_d^2);
     excess_iqr = max(1.0, iqr_log / (M_d - 1.0));
     m_raw = (scale_factor * PR) / ((iqr_log^2) * c1 * (excess_iqr^2));
-    m_floor = max(1.0 / (M_d^2), (M_d - 1.0) / (excess_iqr^3));
+    m_floor = max(M_d / max(M_d - 1.0, 1.0), (M_d - 1.0) / (excess_iqr^3));
     m_eff = max(m_floor, min(1.5 * M_d, m_raw));
 else
     c1_floor = (M_d - 1.0) / M_d;
@@ -822,7 +822,7 @@ else
     iqr_ref = M_d - w_nondip;
     excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
     m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
-    m_floor = max(1.0 / (M_d^2), M_d / (excess_iqr^3));
+    m_floor = max(M_d / max(M_d - 1.0, 1.0), M_d / (excess_iqr^3));
     m_eff = max(m_floor, min(1.5 * M_d, m_raw));
 end
 end
