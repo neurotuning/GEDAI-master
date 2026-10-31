@@ -10,7 +10,7 @@ function [data_clean, data_artifacts, SENSAI_score, SENSAI_score_per_band, artif
 %   data                      (struct)  - FieldTrip data structure (ft_read_data output)
 %
 % Optional cfg fields:
-%   cfg.artifact_threshold_type  (char)    - 'auto-', 'auto', or 'auto+'. [Default: 'auto']
+%   cfg.artifact_threshold_type  (char)    - 'auto-', 'auto', 'auto+', or 'optimize' ('bayesopt'). [Default: 'auto']
 %                                 Or integer determining deartifacting strength with range [0 10]. Stronger threshold type ("auto+") might remove more noise at the
 %                                 expense of signal, while milder threshold. ("auto-") might retain more signal at the expense of noise.
 %                         

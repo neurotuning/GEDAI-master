@@ -40,8 +40,8 @@ function sProcess = GetDescription() %#ok<DEFNU>
     % === Artifact threshold type
     sProcess.options.label1.Comment = '<B>Artifact threshold type</B>';
     sProcess.options.label1.Type    = 'label';
-    sProcess.options.artifact_threshold_type.Comment = {'auto- &nbsp', 'auto &nbsp', 'auto+ &nbsp', ''; ...
-                                                        'auto-', 'auto', 'auto+', ''};
+    sProcess.options.artifact_threshold_type.Comment = {'auto- &nbsp', 'auto &nbsp', 'auto+ &nbsp', 'optimize &nbsp', ''; ...
+                                                        'auto-', 'auto', 'auto+', 'optimize', ''};
     sProcess.options.artifact_threshold_type.Type    = 'radio_linelabel';
     sProcess.options.artifact_threshold_type.Value   = 'auto';
     % === Epoch size in cycles

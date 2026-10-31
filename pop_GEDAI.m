@@ -81,7 +81,7 @@ p.parse(varargin{:}); % Parse the input arguments
 % Create GUI for parameter input
 str_strength = [pad_center('auto') '|' ...
                 pad_center('auto+') '|' ...
-                pad_center('auto-')];
+                pad_center('auto-') '|' pad_center('optimize')];
 
 uilist = { ...    
     {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' str_strength 'horizontalalignment' 'center'} ...
@@ -103,7 +103,7 @@ title = '  GEDAI denoising toolbox |  v1.9  ';
 [userInput, ~, ~, out] = inputgui( 'geometry', geometry, 'uilist', uilist, 'helpcom', 'help(''GEDAI'')', 'title', title, 'skipline', 'off');
 if isempty(out), return; end
 
-threshold_cell = {'auto', 'auto+', 'auto-'};
+threshold_cell = {'auto', 'auto+', 'auto-', 'optimize'};
 artifact_threshold = threshold_cell{userInput{1}};
 ref_matrix_type = 'auto';
 

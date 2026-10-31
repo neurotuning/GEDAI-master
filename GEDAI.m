@@ -23,7 +23,7 @@
 %                                 expense of signal, while milder threshold
 %                                 ("auto-") might retain more signal at the
 %                                 expense of noise. Possible levels:
-%                                 "auto-", "auto", "auto+".
+%                                 "auto-", "auto", "auto+", "optimize" (or "bayesopt").
 %                                 Default is "auto".
 %
 %   epoch_size_in_cycles        - Epoch size in number of wave cycles for each
@@ -712,7 +712,7 @@ end
 
 disp([newline 'SENSAI threshold detection...please wait']);
 broadband_optimization_type = 'parabolic';
-broadband_artifact_threshold_type = artifact_threshold_type;
+bayesopt_results = []; if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && (strcmpi(char(artifact_threshold_type), 'optimize') || strcmpi(char(artifact_threshold_type), 'bayesopt')), [opt_scale, ~, bayesopt_results, selected_opt_type] = GEDAI_bayesopt_strength(EEGin.data, EEGin.srate, EEGin.chanlocs, refCOV, 12, double(~silent_mode), visualize_artifacts, signal_type, epoch_size_in_cycles, lowcut_frequency, parallelize); artifact_threshold_type = selected_opt_type; threshold_label = sprintf('optimize (%.2fx)', opt_scale); end; broadband_artifact_threshold_type = artifact_threshold_type;
 broadband_minThreshold = -4;
 if strcmpi(signal_type, 'meg')
     broadband_maxThreshold = 8;
@@ -1374,7 +1374,7 @@ EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
 EEGclean.etc.GEDAI.refCOV = refCOV;
 EEGclean.etc.GEDAI.leadfield_method = resolved_leadfield_method;
-EEGclean.etc.GEDAI.threshold_label = threshold_label;
+EEGclean.etc.GEDAI.threshold_label = threshold_label; if ~isempty(bayesopt_results), EEGclean.etc.GEDAI.bayesopt_results = bayesopt_results; EEGclean.etc.GEDAI.optimal_auto_scale = bayesopt_results.OptimalAutoScale; end
 if has_flat_recording_ref
     EEGclean.etc.GEDAI.flat_recording_reference = strjoin(flat_ref_labels, ', ');
 elseif is_external_recording_ref
