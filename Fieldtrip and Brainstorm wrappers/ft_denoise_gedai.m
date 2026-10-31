@@ -265,13 +265,6 @@ function [data_clean_out, data_artifacts_out] = split_concatenated_trials(data_t
 end
 
 function [EEGclean, EEGart, Sscore, Sband, Athr] = runGEDAI(EEGin, cfg)
-    extra_args = {};
-    if isfield(cfg, 'prior_blend') && ~isempty(cfg.prior_blend)
-        extra_args = [extra_args, {'prior_blend', cfg.prior_blend}];
-    end
-    if isfield(cfg, 'prior_target_band') && ~isempty(cfg.prior_target_band)
-        extra_args = [extra_args, {'prior_target_band', cfg.prior_target_band}];
-    end
     [EEGclean, EEGart, Sscore, Sband, Athr] = GEDAI( ...
         EEGin, ...
         cfg.artifact_threshold_type, ...
@@ -284,8 +277,7 @@ function [EEGclean, EEGart, Sscore, Sband, Athr] = runGEDAI(EEGin, cfg)
         cfg.enova_threshold_per_channel, ...
         cfg.signal_type, ...
         cfg.smoothing_window_seconds, ...
-        '', ...
-        extra_args{:});
+        '');
 end
 
 function mask = get_samples_to_keep_mask(EEG, target_length)

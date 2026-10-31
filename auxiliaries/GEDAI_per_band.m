@@ -96,12 +96,12 @@ if ~isinf(smoothing_window_seconds)
     refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
     
     % --- Determine Noise Multiplier and Optimization Parameters ---
-    is_auto_threshold = ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto');
+    is_auto_threshold = (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && startsWith(string(artifact_threshold_type), "auto");
     auto_scale = 1.0;
     if is_auto_threshold
-        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; auto_scale = 0.5;
+        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1; auto_scale = 1/3;
         elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6; auto_scale = 2.0;
+        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 9; auto_scale = 3.0;
         else, noise_multiplier = 3; auto_scale = 1.0;
         end
     else
@@ -504,12 +504,12 @@ else
     
     %% Determine Artifact Threshold and Clean EEG
     %% Determine Noise Multiplier and Optimization Parameters
-    is_auto_threshold = ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto');
+    is_auto_threshold = (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && startsWith(string(artifact_threshold_type), "auto");
     auto_scale = 1.0;
     if is_auto_threshold
-        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; auto_scale = 0.5;
+        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1; auto_scale = 1/3;
         elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6; auto_scale = 2.0;
+        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 9; auto_scale = 3.0;
         else, noise_multiplier = 3; auto_scale = 1.0;
         end
     else
