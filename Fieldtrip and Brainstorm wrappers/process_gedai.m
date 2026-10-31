@@ -37,13 +37,6 @@ function sProcess = GetDescription() %#ok<DEFNU>
     sProcess.Description = 'https://neuroimage.usc.edu/brainstorm/Tutorials/Gedai';
     sProcess.isSeparator = 1;
 
-    % === Artifact threshold type
-    sProcess.options.label1.Comment = '<B>Artifact threshold type</B>';
-    sProcess.options.label1.Type    = 'label';
-    sProcess.options.artifact_threshold_type.Comment = {'auto- &nbsp', 'auto &nbsp', 'auto+ &nbsp', ''; ...
-                                                        'auto-', 'auto', 'auto+', ''};
-    sProcess.options.artifact_threshold_type.Type    = 'radio_linelabel';
-    sProcess.options.artifact_threshold_type.Value   = 'auto';
     % === Epoch size in cycles
     sProcess.options.epoch_size_in_cycles.Comment = 'Epoch size in wave cycles (e.g., 12)';
     sProcess.options.epoch_size_in_cycles.Type    = 'value';
@@ -101,8 +94,7 @@ end
 
 
 %% ===== GET OPTIONS =====
-function [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts] = GetOptions(sProcess)
-    artifact_threshold_type = sProcess.options.artifact_threshold_type.Value;
+function [epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts] = GetOptions(sProcess)
     epoch_size_in_cycles    = sProcess.options.epoch_size_in_cycles.Value{1};
     lowcut_frequency        = sProcess.options.lowcut_frequency.Value{1};
     switch sProcess.options.ref_matrix_type.Value
@@ -132,8 +124,8 @@ end
 
 %% ===== FORMAT COMMENT =====
 function Comment = FormatComment(sProcess) %#ok<DEFNU>
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold, enova_threshold_per_channel, ~] = GetOptions(sProcess);
-    Comment = ['GEDAI: ' artifact_threshold_type ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
+    [epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, ~, ~, enova_threshold, enova_threshold_per_channel, ~] = GetOptions(sProcess);
+    Comment = ['GEDAI: ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' ref_matrix_type];
     if ~isempty(enova_threshold)
         Comment = [Comment, ', ENOVA=' num2str(enova_threshold)];
     end
@@ -158,7 +150,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
     end
 
     % Get options
-    [artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts] = GetOptions(sProcess);
+    [epoch_size_in_cycles, lowcut_frequency, ref_matrix_type, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, save_artifacts] = GetOptions(sProcess);
 
     % Iterate over inputs
     for iInput = 1:length(sInputs)
@@ -299,7 +291,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 else
                     ref_matrix_param_MAG = 'interpolated';
                 end
-                [EEGclean_MAG, EEGartifacts_MAG] = GEDAI(EEG_MAG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
+                [EEGclean_MAG, EEGartifacts_MAG] = GEDAI(EEG_MAG, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_MAG, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
 
                 % --- GRAD ---
                 ChannelMatGRAD = ChannelMatFiltered;
@@ -316,7 +308,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 else
                     ref_matrix_param_GRAD = 'interpolated';
                 end
-                [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI(EEG_GRAD, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
+                [EEGclean_GRAD, EEGartifacts_GRAD] = GEDAI(EEG_GRAD, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param_GRAD, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
 
                 target_length = size(sInputFiltered.A, 2);
                 mask_MAG = get_samples_to_keep_mask(EEGclean_MAG, target_length);
@@ -366,7 +358,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
                 else
                     ref_matrix_param = 'interpolated';
                 end
-                [EEGclean, EEGartifacts] = GEDAI(EEG, artifact_threshold_type, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
+                [EEGclean, EEGartifacts] = GEDAI(EEG, epoch_size_in_cycles, lowcut_frequency, ref_matrix_param, parallel, visualize_artifacts, enova_threshold, enova_threshold_per_channel, signal_type);
             end
 
             % =========================================================

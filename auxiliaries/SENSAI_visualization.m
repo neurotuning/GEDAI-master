@@ -1,4 +1,4 @@
-function metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, ref_cov, epoch_duration_sec, signal_type, SSI_top_PCs, artifact_threshold_type, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel)
+function metrics = SENSAI_visualization(EEGavRef, EEGclean, EEGartifacts, ref_cov, epoch_duration_sec, signal_type, SSI_top_PCs, smoothing_window_seconds, SENSAI_score, mean_ENOVA, epoch_size_in_cycles, lowcut_frequency, ENOVA_per_channel)
 % SENSAI_VISUALIZATION  2D SENSAI scatter: subspace similarity vs epoch power
 %
 % Inputs:
@@ -105,22 +105,14 @@ catch
 end
 
 %% ── 4. Plotting ─────────────────────────────────────────────────────────
-if nargin >= 10 && ~isempty(SENSAI_score)
-    if nargin < 11 || isempty(mean_ENOVA), mean_ENOVA = 0; end
-    if nargin < 12 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
-    if nargin < 13 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
-    if isempty(artifact_threshold_type), artifact_threshold_type = 'auto'; end
-    if isnumeric(artifact_threshold_type)
-        artifact_threshold_str = num2str(artifact_threshold_type, '%.2f');
-    elseif isstring(artifact_threshold_type)
-        artifact_threshold_str = char(artifact_threshold_type);
-    else
-        artifact_threshold_str = artifact_threshold_type;
-    end
+if nargin >= 9 && ~isempty(SENSAI_score)
+    if nargin < 10 || isempty(mean_ENOVA), mean_ENOVA = 0; end
+    if nargin < 11 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
+    if nargin < 12 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
     if isempty(smoothing_window_seconds), smoothing_window_seconds = Inf; end
 
     spacer = '              '; % Doubled whitespace separation (2 tabs)
-    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%' spacer 'ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '%' spacer '[' artifact_threshold_str ', ' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
+    plot_title = ['SENSAI = ' num2str(round(SENSAI_score, 2, 'significant')) '%' spacer 'ENOVA = ' num2str(round(mean_ENOVA * 100, 2, 'significant')) '%' spacer '[' num2str(epoch_size_in_cycles) ' cycles, ' num2str(lowcut_frequency) ' Hz, ' num2str(smoothing_window_seconds) ' s]'];
 else
     plot_title = 'SENSAI visualization:  Subspace Similarity  vs  Epoch Power';
 end
@@ -253,7 +245,7 @@ pow_clean_gfp = (pow_clean_raw ./ max(total_gfp, eps)) * 100;
 pow_clean_db  = 10 * log10(max(pow_clean_raw, eps));
 
 % 2. Compute ENOVA per Channel
-if nargin >= 14 && ~isempty(ENOVA_per_channel)
+if nargin >= 13 && ~isempty(ENOVA_per_channel)
     enova_ch = ENOVA_per_channel;
 elseif isfield(EEGclean, 'etc') && isfield(EEGclean.etc, 'GEDAI') && isfield(EEGclean.etc.GEDAI, 'ENOVA_per_channel') && ~isempty(EEGclean.etc.GEDAI.ENOVA_per_channel)
     enova_ch = EEGclean.etc.GEDAI.ENOVA_per_channel;

@@ -17,7 +17,6 @@
 
 function [EEG, com] = pop_GEDAI(EEG, varargin)
 %% Default parameter values
-artifact_threshold = 'auto';
 epoch_size_in_cycles = 12;
 lowcut_frequency = 0.5;
 ENOVA_threshold_per_epoch = 0.95;
@@ -73,18 +72,12 @@ ref_channel_popup_options = strjoin(output_ref_display_options, '|');
 
 % Create an inputParser to handle varargin
 p = inputParser;
-addParameter(p, 'artifact_threshold', artifact_threshold);
 addParameter(p, 'parallel_processing', false); % Add output visual parameter
 addParameter(p, 'visualization_A', false); % Add output visual parameter
 p.parse(varargin{:}); % Parse the input arguments
 
 % Create GUI for parameter input
-str_strength = [pad_center('auto') '|' ...
-                pad_center('auto+') '|' ...
-                pad_center('auto-')];
-
-uilist = { ...    
-    {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' str_strength 'horizontalalignment' 'center'} ...
+uilist = { ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Sliding window (seconds, Inf=all)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds' 'horizontalalignment' 'center'} ...
@@ -96,15 +89,13 @@ uilist = { ...
     {'style' 'checkbox' 'string' ' Parallel processing ( > RAM)' 'tag' 'parallel_processing' 'Value' 1} ...
     {'style' 'checkbox' 'string' ' Artifact visualization' 'tag' 'visualization_A' 'Value' 1} ...
 };
-geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1.4, 1] [1.4, 1] [1] [1] };
+geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1.4, 1] [1.4, 1] [1] [1] };
 title = '  GEDAI denoising toolbox |  v1.9  ';
 
 % Get user input
-[userInput, ~, ~, out] = inputgui( 'geometry', geometry, 'uilist', uilist, 'helpcom', 'help(''GEDAI'')', 'title', title, 'skipline', 'off');
+[~, ~, ~, out] = inputgui( 'geometry', geometry, 'uilist', uilist, 'helpcom', 'help(''GEDAI'')', 'title', title, 'skipline', 'off');
 if isempty(out), return; end
 
-threshold_cell = {'auto', 'auto+', 'auto-'};
-artifact_threshold = threshold_cell{userInput{1}};
 ref_matrix_type = 'auto';
 
 epoch_size_in_cycles = str2double(out.epoch_size_in_cycles);
@@ -169,7 +160,7 @@ else
     output_reference_channel = strtrim(selected_output_reference_channel);
 end
 
-[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ...
+[EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, epoch_size_in_cycles, lowcut_frequency, ...
     ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ...
     ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
   

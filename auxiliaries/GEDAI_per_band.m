@@ -11,7 +11,7 @@
 % For any questions, please contact:
 % dr.t.ros@gmail.com
 
-function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, artifact_threshold_type, epoch_size, refCOV, optimization_type, parallelize, signal_type, minThreshold, maxThreshold, smoothing_window_seconds)
+function [cleaned_data, artifacts_data, SENSAI_score, artifact_threshold_out, ENOVA] = GEDAI_per_band(eeg_data, srate, chanlocs, epoch_size, refCOV, optimization_type, parallelize, signal_type, minThreshold, maxThreshold, smoothing_window_seconds)
 
 if isempty(eeg_data)
     error('Cannot process empty data');
@@ -32,22 +32,22 @@ refCOV = real(refCOV);
 refCOV = (refCOV + refCOV') / 2;
 
 % Default signal_type if not provided
-if nargin < 9 || isempty(signal_type)
+if nargin < 8 || isempty(signal_type)
     signal_type = 'eeg'; 
 end
 
 % Default minThreshold if not provided
-if nargin < 10 || isempty(minThreshold)
+if nargin < 9 || isempty(minThreshold)
     minThreshold = 0;
 end
 
 % Default maxThreshold if not provided
-if nargin < 11 || isempty(maxThreshold)
+if nargin < 10 || isempty(maxThreshold)
     maxThreshold = 12;
 end
 
 % Default smoothing_window_seconds if not provided
-if nargin < 12 || isempty(smoothing_window_seconds)
+if nargin < 11 || isempty(smoothing_window_seconds)
     smoothing_window_seconds = Inf;
 end
 
@@ -96,23 +96,7 @@ if ~isinf(smoothing_window_seconds)
     refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
     
     % --- Determine Noise Multiplier and Optimization Parameters ---
-    is_auto_threshold = ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto');
-    auto_scale = 1.0;
-    if is_auto_threshold
-        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; auto_scale = 0.5;
-        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6; auto_scale = 2.0;
-        else, noise_multiplier = 3; auto_scale = 1.0;
-        end
-    else
-        if isnumeric(artifact_threshold_type)
-            val = artifact_threshold_type;
-        else
-            val = str2double(artifact_threshold_type);
-        end
-        noise_multiplier = 10 - val;
-    end
-    if isnan(noise_multiplier), noise_multiplier = 3; end
+    noise_multiplier = 3;
     
     % Pre-calculate RefCOV eigenvectors for SENSAI
     if strcmpi(signal_type, 'eeg')
@@ -174,8 +158,8 @@ if ~isinf(smoothing_window_seconds)
             [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(COV_sub(:,:,i), refCOV_reg, 'chol');
         end
         
-        if is_auto_threshold && strcmpi(signal_type, 'eeg')
-            noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
+        if strcmpi(signal_type, 'eeg')
+            noise_multiplier = local_compute_z3_noise_multiplier( ...
                 Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold);
         end
         
@@ -504,26 +488,7 @@ else
     
     %% Determine Artifact Threshold and Clean EEG
     %% Determine Noise Multiplier and Optimization Parameters
-    is_auto_threshold = ischar(artifact_threshold_type) && startsWith(artifact_threshold_type, 'auto');
-    auto_scale = 1.0;
-    if is_auto_threshold
-        if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1.5; auto_scale = 0.5;
-        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 6; auto_scale = 2.0;
-        else, noise_multiplier = 3; auto_scale = 1.0;
-        end
-    else
-        % Numeric input defines noise_multiplier linkage
-        if isnumeric(artifact_threshold_type)
-            val = artifact_threshold_type;
-        else
-            val = str2double(artifact_threshold_type);
-        end
-        noise_multiplier = 10 - val;
-    end
-    
-    % Ensure valid multiplier
-    if isnan(noise_multiplier), noise_multiplier = 3; end
+    noise_multiplier = 3;
     
     % --- Run SENSAI Optimization ---
     
@@ -566,7 +531,7 @@ else
     % --- Optimization Method Switch (Sliding Window) ---
     % smoothing_window_seconds controls the sliding window size.
     % Inf (default) means use the entire file as one window (no sliding = original global behavior).
-    if nargin < 12 || isempty(smoothing_window_seconds)
+    if nargin < 11 || isempty(smoothing_window_seconds)
         smoothing_window_seconds = Inf;
     end
     if isinf(smoothing_window_seconds)
@@ -602,8 +567,8 @@ else
         Evec_sub = Evec(:,:,idx_start:idx_end);
         COV_sub = COV(:,:,idx_start:idx_end);
         
-        if is_auto_threshold && strcmpi(signal_type, 'eeg')
-            noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
+        if strcmpi(signal_type, 'eeg')
+            noise_multiplier = local_compute_z3_noise_multiplier( ...
                 Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold);
         end
         

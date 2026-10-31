@@ -10,10 +10,6 @@ function [data_clean, data_artifacts, SENSAI_score, SENSAI_score_per_band, artif
 %   data                      (struct)  - FieldTrip data structure (ft_read_data output)
 %
 % Optional cfg fields:
-%   cfg.artifact_threshold_type  (char)    - 'auto-', 'auto', or 'auto+'. [Default: 'auto']
-%                                 Or integer determining deartifacting strength with range [0 10]. Stronger threshold type ("auto+") might remove more noise at the
-%                                 expense of signal, while milder threshold. ("auto-") might retain more signal at the expense of noise.
-%                         
 %   cfg.epoch_size               (double)  - Epoch size in wave CYCLES. [Default: 12]
 %   cfg.lowcut_frequency         (double)  - Low-cut frequency in Hz. [Default: 0.5]
 %   cfg.ref_matrix_type          (char or matrix) - Leadfield reference. [Default: 'precomputed']
@@ -57,7 +53,6 @@ if nargin < 2 || ~isstruct(cfg) || ~isstruct(data)
 end
 
 % ---------- defaults ----------
-def.artifact_threshold_type = 'auto';
 def.epoch_size              = 12;       % wave cycles (= epoch_size_in_cycles in GEDAI)
 def.lowcut_frequency        = 0.5;
 def.ref_matrix_type         = 'precomputed';
@@ -71,12 +66,6 @@ def.signal_type             = '';       % empty = auto-detect
 def.smoothing_window_seconds = Inf;
 
 cfg = applyDefaults(cfg, def);
-
-% Allow numeric threshold (e.g. cfg.artifact_threshold_type = 3.5)
-% GEDAI_per_band expects a string; convert so str2double() works correctly.
-if isnumeric(cfg.artifact_threshold_type)
-    cfg.artifact_threshold_type = num2str(cfg.artifact_threshold_type);
-end
 
 % ---------- FieldTrip field checks ----------
 reqFields = {'trial', 'time', 'label', 'fsample'};
@@ -265,16 +254,8 @@ function [data_clean_out, data_artifacts_out] = split_concatenated_trials(data_t
 end
 
 function [EEGclean, EEGart, Sscore, Sband, Athr] = runGEDAI(EEGin, cfg)
-    extra_args = {};
-    if isfield(cfg, 'prior_blend') && ~isempty(cfg.prior_blend)
-        extra_args = [extra_args, {'prior_blend', cfg.prior_blend}];
-    end
-    if isfield(cfg, 'prior_target_band') && ~isempty(cfg.prior_target_band)
-        extra_args = [extra_args, {'prior_target_band', cfg.prior_target_band}];
-    end
     [EEGclean, EEGart, Sscore, Sband, Athr] = GEDAI( ...
         EEGin, ...
-        cfg.artifact_threshold_type, ...
         cfg.epoch_size, ...
         cfg.lowcut_frequency, ...
         cfg.ref_matrix_type, ...
@@ -284,8 +265,7 @@ function [EEGclean, EEGart, Sscore, Sband, Athr] = runGEDAI(EEGin, cfg)
         cfg.enova_threshold_per_channel, ...
         cfg.signal_type, ...
         cfg.smoothing_window_seconds, ...
-        '', ...
-        extra_args{:});
+        '');
 end
 
 function mask = get_samples_to_keep_mask(EEG, target_length)
