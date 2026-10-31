@@ -81,16 +81,10 @@ p.parse(varargin{:}); % Parse the input arguments
 % Create GUI for parameter input
 str_strength = [pad_center('auto') '|' ...
                 pad_center('auto+') '|' ...
-                pad_center('auto-') '|' ...
-                pad_center('optimize')];
-
-str_prior_blend = [pad_center('Off') '|' ...
-                   pad_center('McCann Geodesic') '|' ...
-                   pad_center('Linear Blend')];
+                pad_center('auto-')];
 
 uilist = { ...    
     {'style' 'text' 'string' 'Denoising strength'}    {'style' 'popupmenu' 'string' str_strength 'horizontalalignment' 'center'} ...
-    {'style' 'text' 'string' 'Empirical blending'} {'style' 'popupmenu' 'string' str_prior_blend 'tag' 'prior_blend_popup' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Epoch size (wave cycles)'} {'style' 'edit' 'string' num2str(epoch_size_in_cycles) 'tag' 'epoch_size_in_cycles' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Low-cut frequency (Hz)'} {'style' 'edit' 'string' num2str(lowcut_frequency) 'tag' 'lowcut_frequency' 'horizontalalignment' 'center'} ...
     {'style' 'text' 'string' 'Sliding window (seconds, Inf=all)'} {'style' 'edit' 'string' num2str(smoothing_window_seconds_default) 'tag' 'smoothing_window_seconds' 'horizontalalignment' 'center'} ...
@@ -102,27 +96,16 @@ uilist = { ...
     {'style' 'checkbox' 'string' ' Parallel processing ( > RAM)' 'tag' 'parallel_processing' 'Value' 1} ...
     {'style' 'checkbox' 'string' ' Artifact visualization' 'tag' 'visualization_A' 'Value' 1} ...
 };
-geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1.4, 1] [1.4, 1] [1] [1] };
+geometry = { [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1.4, 1] [1] [1.4, 1] [1.4, 1] [1] [1] };
 title = '  GEDAI denoising toolbox |  v1.9  ';
 
 % Get user input
 [userInput, ~, ~, out] = inputgui( 'geometry', geometry, 'uilist', uilist, 'helpcom', 'help(''GEDAI'')', 'title', title, 'skipline', 'off');
 if isempty(out), return; end
 
-threshold_cell = {'auto', 'auto+', 'auto-', 'optimize'};
+threshold_cell = {'auto', 'auto+', 'auto-'};
 artifact_threshold = threshold_cell{userInput{1}};
 ref_matrix_type = 'auto';
-
-% Parse Prior Geodesic Blending selection
-blend_options = {'off', 'mccann_top75', '2pass_top75'};
-
-blend_idx = 1;
-if isfield(out, 'prior_blend_popup') && ~isempty(out.prior_blend_popup)
-    blend_raw = out.prior_blend_popup;
-    if iscell(blend_raw), blend_raw = blend_raw{1}; end
-    blend_idx = max(1, min(length(blend_options), round(double(blend_raw))));
-end
-prior_blend_val = blend_options{blend_idx};
 
 epoch_size_in_cycles = str2double(out.epoch_size_in_cycles);
 lowcut_frequency = str2double(out.lowcut_frequency);
@@ -188,8 +171,7 @@ end
 
 [EEG, ~, ~, ~, ~, ~, ~, com] = GEDAI(EEG, artifact_threshold, epoch_size_in_cycles, lowcut_frequency, ...
     ref_matrix_type, use_parallel, visualize_artifacts, ENOVA_threshold_per_epoch, ...
-    ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel, ...
-    'prior_blend', prior_blend_val);
+    ENOVA_threshold_per_channel, [], smoothing_window_seconds, output_reference_channel);
   
 EEG = eegh(com, EEG); % update EEG.history
 

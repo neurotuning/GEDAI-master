@@ -24,6 +24,13 @@ sensaifunc = @(artifactThreshold) SENSAIObjective(artifactThreshold, refCOV, Eva
 % if its first upper probe overshoots the active peak. Refine on [3.5, maxThreshold].
 if maxThreshold > 3.5 && noise_multiplier < 1.5 && optimalThreshold <= 3.5
     [opt_sub, neg_sub] = local_fminbnd(sensaifunc, 3.5, maxThreshold, 1e-2);
+    if maxThreshold > 7.5
+        [opt_mid, neg_mid] = local_fminbnd(sensaifunc, 3.5, 7.5, 1e-2);
+        if neg_mid < neg_sub
+            opt_sub = opt_mid;
+            neg_sub = neg_mid;
+        end
+    end
     if neg_sub < negMaxSENSAIScore - 1e-9
         optimalThreshold = opt_sub;
         negMaxSENSAIScore = neg_sub;
