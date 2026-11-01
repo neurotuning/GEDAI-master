@@ -2053,10 +2053,10 @@ band_threshold_types = repmat({artifact_threshold_type}, 1, max(1, num_proc));
 if ~strcmpi(signal_type, 'eeg') || num_proc < 1 || N_ch <= 2
     return;
 end
-if ~(ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) || ~strncmp(char(artifact_threshold_type), 'auto:', 5)
+if ~(ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) || (~strncmp(char(artifact_threshold_type), 'auto:', 5) && ~strcmpi(char(artifact_threshold_type), 'auto'))
     return;
 end
-sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:"));
+if strcmpi(char(artifact_threshold_type), 'auto'), sc_opt = 0.5; else, sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:")); end
 if isnan(sc_opt) || sc_opt >= 1.0
     return;
 end

@@ -97,12 +97,12 @@ if ~isinf(smoothing_window_seconds)
     
     % --- Determine Noise Multiplier and Optimization Parameters ---
     is_auto_threshold = (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && startsWith(string(artifact_threshold_type), "auto");
-    auto_scale = 1.0;
+    auto_scale = 0.5;
     if is_auto_threshold
         if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1; auto_scale = 1/3;
-        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 9; auto_scale = 3.0;
-        elseif strncmp(char(artifact_threshold_type),'auto:',5), auto_scale = str2double(extractAfter(string(artifact_threshold_type),"auto:")); noise_multiplier = 3 * auto_scale; else, noise_multiplier = 3; auto_scale = 1.0;
+        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 0.5;
+        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 3; auto_scale = 1.0;
+        elseif strncmp(char(artifact_threshold_type),'auto:',5), auto_scale = str2double(extractAfter(string(artifact_threshold_type),"auto:")); noise_multiplier = 3 * auto_scale; else, noise_multiplier = 3; auto_scale = 0.5;
         end
     else
         if isnumeric(artifact_threshold_type)
@@ -505,12 +505,12 @@ else
     %% Determine Artifact Threshold and Clean EEG
     %% Determine Noise Multiplier and Optimization Parameters
     is_auto_threshold = (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && startsWith(string(artifact_threshold_type), "auto");
-    auto_scale = 1.0;
+    auto_scale = 0.5;
     if is_auto_threshold
         if strcmp(artifact_threshold_type,'auto+'), noise_multiplier = 1; auto_scale = 1/3;
-        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 1.0;
-        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 9; auto_scale = 3.0;
-        elseif strncmp(char(artifact_threshold_type),'auto:',5), auto_scale = str2double(extractAfter(string(artifact_threshold_type),"auto:")); noise_multiplier = 3 * auto_scale; else, noise_multiplier = 3; auto_scale = 1.0;
+        elseif strcmp(artifact_threshold_type,'auto'), noise_multiplier = 3; auto_scale = 0.5;
+        elseif strcmp(artifact_threshold_type,'auto-'), noise_multiplier = 3; auto_scale = 1.0;
+        elseif strncmp(char(artifact_threshold_type),'auto:',5), auto_scale = str2double(extractAfter(string(artifact_threshold_type),"auto:")); noise_multiplier = 3 * auto_scale; else, noise_multiplier = 3; auto_scale = 0.5;
         end
     else
         % Numeric input defines noise_multiplier linkage

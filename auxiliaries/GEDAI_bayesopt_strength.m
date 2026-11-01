@@ -68,28 +68,28 @@ EEG_eval.etc = struct();
 if verbose
     fprintf('\n=== GEDAI: Bayesian Optimization (bayesopt) of Denoising Strength ===\n');
     fprintf('  Sweeping auto_scale multiplier in [0.10x (most aggressive) .. 5.00x (least aggressive)]\n');
-    fprintf('  Baseline anchor: ''auto'' (1.00x) | ''auto+'' (0.33x) | ''auto-'' (3.00x)\n');
+    fprintf('  Baseline anchor: ''auto'' (0.50x) | ''auto+'' (0.33x) | ''auto-'' (1.00x)\n');
 end
 
 warn_state = warning('off');
 clean_up = onCleanup(@() warning(warn_state));
 
-% Step 0: Evaluate 'auto' (1.0x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
+% Step 0: Evaluate 'auto' (0.50x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
 outer_noise_multiplier = [];
-[sensai_auto, en_auto, outer_noise_multiplier] = eval_autoscale_metrics(1.0, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
+[sensai_auto, en_auto, outer_noise_multiplier] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
 if en_auto < 18.0
     en_cap = en_auto + 1.5;
 else
     en_cap = max(52.0, en_auto);
 end
 
-eval_hist_scale  = 1.0;
+eval_hist_scale  = 0.5;
 eval_hist_sensai = sensai_auto;
 eval_hist_enova  = en_auto;
-eval_hist_obj    = sensai_auto; % At 1.0x, ENOVA penalty is 0
+eval_hist_obj    = sensai_auto; % At 0.50x ('auto'), ENOVA penalty is 0
 
-% Initial log-spaced anchor seeds across [0.10, 5.00] including 0.10x, 0.18x, 0.33x (auto+), 0.60x, 1.50x, 3.00x (auto-), 5.00x
-default_seeds = [0.10; 0.18; 1/3; 0.60; 1.50; 3.00; 5.00];
+% Initial log-spaced anchor seeds across [0.10, 5.00] including 0.10x, 0.18x, 0.33x (auto+), 1.00x (auto-), 1.50x, 3.00x, 5.00x
+default_seeds = [0.10; 0.18; 1/3; 1.00; 1.50; 3.00; 5.00];
 n_init = min(numel(default_seeds), max(1, max_evals - 1));
 init_scales = default_seeds(1:n_init);
 
@@ -135,11 +135,11 @@ best_scale  = eval_hist_scale(best_idx);
 best_SENSAI = eval_hist_sensai(best_idx);
 best_ENOVA  = eval_hist_enova(best_idx);
 
-% Monotonic baseline guarantee: if no candidate strictly beats 'auto' (1.0x), retain 'auto'
-if best_obj_val > sensai_auto + 1e-6 && abs(best_scale - 1.0) > 1e-3
+% Monotonic baseline guarantee: if no candidate strictly beats 'auto' (0.50x), retain 'auto'
+if best_obj_val > sensai_auto + 1e-6 && abs(best_scale - 0.5) > 1e-3
     selected_threshold_type = sprintf('auto:%.6f', best_scale);
 else
-    best_scale  = 1.0;
+    best_scale  = 0.5;
     best_SENSAI = sensai_auto;
     best_ENOVA  = en_auto;
     selected_threshold_type = 'auto';
@@ -167,7 +167,7 @@ if plot_opt
     ys = eval_hist_obj(ord);
     semilogx(xs, ys, '-o', 'LineWidth', 1.8, 'MarkerSize', 6);
     hold on;
-    yline(sensai_auto, '--k', sprintf('''auto'' (1.0x) baseline (%.2f%%)', sensai_auto), 'LineWidth', 1.2);
+    yline(sensai_auto, '--k', sprintf('''auto'' (0.50x) baseline (%.2f%%)', sensai_auto), 'LineWidth', 1.2);
     semilogx(best_scale, best_obj_val, 'rp', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
     xlabel('Denoising Multiplier auto\_scale (0.1x = most aggressive, 5.0x = least aggressive)');
     ylabel(sprintf('Outer SENSAI\\_basic Objective (%%) [Z3 mult = %.2f]', outer_noise_multiplier));
@@ -177,7 +177,7 @@ end
 
 if verbose
     fprintf('  Outer Z3 noise_multiplier:    %.2f (fixed across all candidate evaluations)\n', outer_noise_multiplier);
-    fprintf('  Baseline ''auto'' (1.00x):      Outer SENSAI = %+.2f%% | ENOVA = %.1f%% (Ceiling = %.1f%%)\n', sensai_auto, en_auto, en_cap);
+    fprintf('  Baseline ''auto'' (0.50x):      Outer SENSAI = %+.2f%% | ENOVA = %.1f%% (Ceiling = %.1f%%)\n', sensai_auto, en_auto, en_cap);
     fprintf('  Selected Optimal Multiplier:  auto_scale* = %.2fx (%d evals)\n', best_scale, opt_results.NumEvaluations);
     fprintf('  Selected Outer SENSAI/ENOVA:  Outer SENSAI = %+.2f%% | ENOVA = %.1f%%\n', best_SENSAI, best_ENOVA);
     fprintf('=====================================================================\n\n');
