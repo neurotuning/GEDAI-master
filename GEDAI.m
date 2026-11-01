@@ -724,6 +724,7 @@ if ndims(refCOV) == 3
 else
     refCOV_broadband = refCOV;
 end
+[broadband_artifact_threshold_type, band_artifact_threshold_types] = GEDAI_compute_band_z3_scales(EEGavRef.data, EEGavRef.srate, refCOV_broadband, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier);
 [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV_broadband, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
@@ -882,7 +883,7 @@ if parallelize
             else
                 current_refCOV = const_refCOV.Value;
             end
-            [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(wavelet_data_band, srate, const_chanlocs.Value, band_artifact_threshold_types{f}, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             catch ME
                 % If OOM or other memory error, try single precision
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
@@ -891,7 +892,7 @@ if parallelize
                 else
                     current_refCOV = const_refCOV.Value;
                 end
-                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, temp_sensai, temp_thresh, temp_enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, const_chanlocs.Value, band_artifact_threshold_types{f}, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
 
             % RAM OPTIMIZATION: Accumulate directly using a reduction variable (avoids massive cell array copies)
@@ -934,7 +935,7 @@ if ~parallelize || ~success_parallel
             else
                 current_refCOV = refCOV;
             end
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(double(wavelet_data_band), srate, EEGavRef.chanlocs, band_artifact_threshold_types{f}, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
 
             catch ME
                 warning('GEDAI_per_band failed for band %d: %s. Retrying with single precision...', f, ME.message);
@@ -943,7 +944,7 @@ if ~parallelize || ~success_parallel
                 else
                     current_refCOV = refCOV;
                 end
-                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+                [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, band_artifact_threshold_types{f}, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             end
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -975,7 +976,7 @@ if ~parallelize || ~success_parallel
                 current_refCOV = refCOV;
             end
 
-            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, artifact_threshold_type, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
+            [cleaned_band_data, ~, sensai_val, thresh_val, enova_val] = GEDAI_per_band(single(wavelet_data_band), srate, EEGavRef.chanlocs, band_artifact_threshold_types{f}, current_epoch_size, current_refCOV, 'parabolic', false, signal_type, current_minThreshold, [], smoothing_window_seconds);
             disp(['processing wavelet band (single) = ' num2str(f)])
 
             % MEMORY OPTIMIZED: Accumulate directly into 2D array
@@ -2030,4 +2031,131 @@ K = zeros(N_s, 3 * N_d);
 K(:, 1:3:end) = dx ./ dist3;
 K(:, 2:3:end) = dy ./ dist3;
 K(:, 3:3:end) = dz ./ dist3;
+end
+
+
+function [bb_threshold_type, band_threshold_types] = GEDAI_compute_band_z3_scales(raw_data, srate, refCOV, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier)
+% GEDAI_COMPUTE_BAND_Z3_SCALES - Band-Local Z3 Adaptation for 'optimize' / 'auto:<sc>'.
+% When an aggressive scale sc < 1.0 is selected for EEG, computes each MODWT wavelet
+% band's raw Z3 multiplier m_eff(f) in [m_min, 1.5*M] (where M = SSI_top_PCs = 3,
+% m_min = M/(M-1) = 1.5). Contaminated bands (w_clean = 0, e.g. B1-B3 EMG) receive
+% sc_dirty = sc * sqrt(min(1, m_eff(f)/M)), while clean dipolar bands (w_clean = 1,
+% e.g. B4 Alpha, m_eff(f) >= M) and Broadband Pass 1 relax toward max(sc, 1/M).
+
+[N_ch, N_pnts] = size(raw_data);
+num_wav_bands = max(6, min(ceil(log2(srate / lowcut_frequency)), floor(log2(N_pnts))));
+up_freqs = srate ./ (2.^(1:num_wav_bands));
+low_freqs = srate ./ (2.^(2:num_wav_bands+1));
+num_proc = num_wav_bands - sum(up_freqs <= lowcut_frequency);
+while num_proc > 0 && (epoch_size_in_cycles / low_freqs(num_proc)) * srate > N_pnts
+    lowcut_frequency = up_freqs(num_proc);
+    num_proc = num_wav_bands - sum(up_freqs <= lowcut_frequency);
+end
+
+bb_threshold_type = artifact_threshold_type;
+band_threshold_types = repmat({artifact_threshold_type}, 1, max(1, num_proc));
+
+if ~strcmpi(signal_type, 'eeg') || num_proc < 1 || N_ch <= 2
+    return;
+end
+if ~(ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) || ~strncmp(char(artifact_threshold_type), 'auto:', 5)
+    return;
+end
+sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:"));
+if isnan(sc_opt) || sc_opt >= 1.0
+    return;
+end
+
+persistent cached_sig cached_m_eff
+sig_vec = [double(N_ch), double(N_pnts), double(srate), double(num_proc), ...
+           double(raw_data(1, 1)), double(raw_data(end, end)), double(sum(raw_data(1, :)))];
+
+if ~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(cached_sig - sig_vec)) <= 1e-9 && numel(cached_m_eff) == num_proc
+    m_eff_vec = cached_m_eff;
+else
+    act_level = num_wav_bands - 1;
+    min_ep_s  = min(ceil(k_channel_multiplier * N_ch), N_pnts);
+    ep_sizes  = max(epoch_size_in_cycles ./ low_freqs(1:num_proc), min_ep_s / srate);
+    for f = 1:num_proc
+        id_s = round(ep_sizes(f) * srate);
+        if rem(id_s, 2) ~= 0, id_s = id_s + 1; end
+        ep_sizes(f) = id_s / srate;
+    end
+
+    M_d = double(min(3, N_ch));
+    m_min = M_d / max(M_d - 1.0, 1.0);
+    c1_fl = (M_d - 1.0) / M_d;
+
+    refCOV_d = double(real(refCOV));
+    refCOV_d = (refCOV_d + refCOV_d') / 2;
+    reg_val  = trace(refCOV_d) / N_ch;
+    refCOV_reg = 0.95 * refCOV_d + 0.05 * reg_val * eye(N_ch);
+    refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
+    [Vs, Ds] = eig(refCOV_reg);
+    [~, sidx] = sort(diag(Ds), 'descend');
+    evecs_T = Vs(:, sidx(1:round(M_d)));
+
+    raw_T = double(raw_data)';
+    m_eff_vec = repmat(M_d, 1, num_proc);
+    for f = 1:num_proc
+        wb_raw = stateful_modwt_single_band(raw_T, 'haar', act_level, f)';
+        ep_s = max(2, round(ep_sizes(f) * srate));
+        N_ep = floor(size(wb_raw, 2) / ep_s);
+        if N_ep < 1, continue; end
+        wb_ep = reshape(wb_raw(:, 1:N_ep*ep_s), N_ch, ep_s, N_ep);
+        all_ev = zeros(N_ch, N_ep);
+        pr     = zeros(1, N_ep);
+        c1v    = zeros(1, N_ep);
+        for e = 1:N_ep
+            C_ep = cov(wb_ep(:, :, e)');
+            C_ep = (C_ep + C_ep') / 2;
+            [Ec, Ev] = eig(C_ep, refCOV_reg, 'chol');
+            ev_r = abs(double(diag(Ev)));
+            [ev_s, ord] = sort(ev_r, 'ascend');
+            all_ev(:, e) = ev_s;
+            ev_a = ev_s(2:end);
+            pr(e) = (sum(ev_a)^2) / max(sum(ev_a.^2), 1e-12);
+            vt = double(Ec(:, ord(end)));
+            pt = refCOV_reg * vt;
+            c1v(e) = norm(evecs_T' * (pt / max(norm(pt), 1e-12)));
+        end
+        pk = all_ev(end, :);
+        tmask = (pk >= median(pk));
+        if ~any(tmask), tmask = true(1, N_ep); end
+        k_start = max(2, N_ch - (round(M_d)^3) + 1);
+        act = all_ev(k_start:end, tmask);
+        pos = log(act(act > 0));
+        if numel(pos) >= 2
+            iqr_l = max(0.5, prctile(pos, 75) - prctile(pos, 25));
+        else
+            iqr_l = 1.0;
+        end
+        PRm = mean(pr(tmask));
+        c1m = max(0.15, min(0.95, mean(c1v(tmask))));
+        w_nd = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)));
+        iqr_ref = M_d - w_nd;
+        ex_iqr  = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
+        m_raw   = (M_d * PRm) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
+        m_floor = max(m_min, M_d / (ex_iqr^3));
+        m_eff_vec(f) = max(m_floor, min(1.5 * M_d, m_raw));
+    end
+    cached_sig   = sig_vec;
+    cached_m_eff = m_eff_vec;
+end
+
+M_d   = double(min(3, N_ch));
+m_min = M_d / max(M_d - 1.0, 1.0);
+sc_clean = max(sc_opt, 1.0 / M_d);
+
+w_clean_vec = min(1.0, max(0.0, (m_eff_vec - m_min) ./ max(M_d - m_min, 1e-12)));
+w_bb_clean  = max(w_clean_vec(1:min(5, num_proc)));
+sc_bb       = sc_opt * ((sc_clean / sc_opt) ^ w_bb_clean);
+bb_threshold_type = sprintf('auto:%.6f', sc_bb);
+
+for f = 1:num_proc
+    w_c = w_clean_vec(f);
+    sc_dirty = sc_opt * sqrt(min(1.0, m_eff_vec(f) / M_d));
+    sc_band  = (sc_dirty ^ (1.0 - w_c)) * (sc_clean ^ w_c);
+    band_threshold_types{f} = sprintf('auto:%.6f', sc_band);
+end
 end
