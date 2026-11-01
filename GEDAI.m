@@ -1729,23 +1729,18 @@ function idx = GEDAI_match_template_labels(chanlocs, tmpl)
 n = length(chanlocs);
 idx = zeros(1, n);
 if ~isfield(chanlocs, 'labels'), return; end
-tmpl_lower = lower(strtrim(tmpl));
-alias_from = {'t3', 't4', 't5', 't6'};
-alias_to   = {'t7', 't8', 'p7', 'p8'};
-for i = 1:n
-    lbl = strtrim(char(string(chanlocs(i).labels)));
-    if isempty(lbl), continue; end
-    % Strip common hardware prefixes/suffixes (e.g., 'EEG Fz-Ref' -> 'Fz')
-    lbl = regexprep(lbl, '^eeg[\s_-]+', '', 'ignorecase');
-    lbl = regexprep(lbl, '[\s_-]*(ref|av|avg|le|ear)$', '', 'ignorecase');
-    lbl_low = lower(strtrim(lbl));
-    [is_alias, a_idx] = ismember(lbl_low, alias_from);
-    if is_alias
-        lbl_low = alias_to{a_idx};
-    end
-    [found, j] = ismember(lbl_low, tmpl_lower);
+labels = {chanlocs.labels};
+for i = 1:length(labels)
+    [found, j] = ismember(lower(labels{i}), lower(tmpl));
     if found
         idx(i) = j;
+    else
+        for j = 1:length(tmpl)
+            if contains(lower(labels{i}), lower(tmpl{j}))
+                idx(i) = j;
+                break;
+            end
+        end
     end
 end
 end
@@ -1800,8 +1795,8 @@ for idx = 1:length(chanlocs)
 
     if ~has_xyz && ~has_polar && ~isempty(leadfield_electrodes) && isfield(chanlocs(idx), 'labels') && ~isempty(chanlocs(idx).labels)
         temp_names = {leadfield_electrodes.Name};
-        match_idx = GEDAI_match_template_labels(chanlocs(idx), temp_names);
-        if match_idx > 0 && ~isempty(leadfield_electrodes(match_idx).Loc)
+        match_idx = find(strcmpi(strtrim(chanlocs(idx).labels), temp_names), 1);
+        if ~isempty(match_idx) && ~isempty(leadfield_electrodes(match_idx).Loc)
             loc_3d = leadfield_electrodes(match_idx).Loc;
             chanlocs(idx).X = loc_3d(1);
             chanlocs(idx).Y = loc_3d(2);
