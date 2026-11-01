@@ -2140,7 +2140,7 @@ end
 
 M_d   = double(min(3, N_ch));
 m_min = M_d / max(M_d - 1.0, 1.0);
-sc_clean = max(sc_opt, 1.0 / M_d);
+if strcmpi(char(artifact_threshold_type), 'auto'), sc_clean = 1.0; else, sc_clean = max(sc_opt, 1.0 / M_d); end
 
 w_clean_vec = min(1.0, max(0.0, (m_eff_vec - m_min) ./ max(M_d - m_min, 1e-12)));
 w_bb_clean  = max(w_clean_vec(1:min(5, num_proc)));
