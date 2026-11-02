@@ -39,9 +39,9 @@ if nargin < 11 || isempty(parallelize), parallelize = false; end
 data = double(data);
 [nbchan, pnts] = size(data);
 
-% Subsample up to 60 seconds using 3 representative blocks (early/mid/late)
+% Subsample up to 20 seconds using 3 representative blocks (early/mid/late)
 % with cosine-tapered seams for fast evaluation on long recordings
-max_opt_sec = 60;
+max_opt_sec = 20;
 max_opt_pnts = min(pnts, round(max_opt_sec * srate));
 if pnts > round(max_opt_pnts * 1.25)
     blk_len = floor(max_opt_pnts / 3);
@@ -84,13 +84,16 @@ eval_hist_sensai = sensai_auto;
 eval_hist_enova  = en_auto;
 eval_hist_obj    = sensai_auto; % At 0.50x ('auto'), ENOVA penalty is 0
 
-% Initial log-spaced anchor seeds across [0.10, 5.00] including 0.10x, 0.18x, 0.33x (auto+), 1.00x (auto-), 1.50x, 3.00x, 5.00x
-default_seeds = [0.10; 0.18; 1/3; 1.00; 1.50; 3.00; 5.00];
+% Initial log-spaced anchor seeds across the trust region around 'auto' (0.50x)
+default_seeds = [1/3; 0.42; 0.65; 1.00; 1.50];
+if verbose == 0 && ~plot_opt
+    default_seeds = [1/3; 0.42; 0.65; 1.00];
+end
 n_init = min(numel(default_seeds), max(1, max_evals - 1));
 init_scales = default_seeds(1:n_init);
 
 rem_budget = max(1, max_evals - 1);
-use_bayesopt = ( exist('bayesopt', 'file') == 2 || exist('bayesopt', 'class') == 8 ) && (rem_budget >= 4);
+use_bayesopt = (verbose > 0 || plot_opt) && ( exist('bayesopt', 'file') == 2 || exist('bayesopt', 'class') == 8 ) && (rem_budget >= 4);
 
 if use_bayesopt
     scale_var = optimizableVariable('auto_scale', [0.10, 5.00], 'Type', 'real', 'Transform', 'log');
@@ -110,18 +113,9 @@ if use_bayesopt
 end
 
 if ~use_bayesopt
-    % Fallback if Statistics and Machine Learning Toolbox bayesopt is unavailable
+    % Fast deterministic log-grid evaluation across the trust-region anchors
     for k = 1:numel(init_scales)
         bayesopt_tracked_objective(init_scales(k));
-    end
-    [~, idx_b] = max(eval_hist_obj);
-    sc_center = eval_hist_scale(idx_b);
-    sc_lo = max(0.10, sc_center * 0.60);
-    sc_hi = min(5.00, sc_center * 1.65);
-    rem_f = max(0, max_evals - numel(eval_hist_scale));
-    if rem_f >= 2
-        opts = optimset('TolX', 0.02, 'MaxFunEvals', rem_f, 'Display', 'off');
-        fminbnd(@(log_sc) bayesopt_tracked_objective(exp(log_sc)), log(sc_lo), log(sc_hi), opts);
     end
     bo_res = [];
 end
