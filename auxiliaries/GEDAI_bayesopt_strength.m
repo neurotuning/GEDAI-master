@@ -77,11 +77,7 @@ clean_up = onCleanup(@() warning(warn_state));
 % Step 0: Evaluate 'auto' (0.50x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
 outer_noise_multiplier = [];
 [sensai_auto, en_auto, outer_noise_multiplier] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
-if en_auto < 18.0
-    en_cap = en_auto + 1.5;
-else
-    en_cap = max(52.0, en_auto);
-end
+en_cap = en_auto + 1.0;
 
 eval_hist_scale  = 0.5;
 eval_hist_sensai = sensai_auto;
@@ -192,7 +188,7 @@ end
             return;
         end
         [sen_v, en_v] = eval_autoscale_metrics(sc_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
-        obj_v = sen_v - 2.0 * max(0, en_v - en_cap)^1.5;
+        obj_v = sen_v - 2.0 * max(0, en_v - en_cap)^1.5 - 2.0 * max(0, (en_auto - 1.5) - en_v)^1.5;
         eval_hist_scale(end+1, 1)  = sc_val;
         eval_hist_sensai(end+1, 1) = sen_v;
         eval_hist_enova(end+1, 1)  = en_v;
@@ -215,7 +211,7 @@ try
         if strcmpi(signal_type, 'meg')
             outer_noise_mult = 3.0;
         else
-            outer_noise_mult = compute_outer_z3_noise_multiplier(X_in_hp, EEG_in.srate, refCOV_used, signal_type);
+            outer_noise_mult = 1.5 * compute_outer_z3_noise_multiplier(X_in_hp, EEG_in.srate, refCOV_used, signal_type);
         end
     end
     [sensai_score, ~, ~, ~] = SENSAI_basic(X_cl, X_ar, EEG_in.srate, 1, refCOV_used, outer_noise_mult, signal_type);
@@ -260,6 +256,10 @@ Evec_sub = zeros(N_chans, N_chans, n_epochs);
 for epo = 1:n_epochs
     C_ep = cov(X_ep(:, :, epo)');
     C_ep = (C_ep + C_ep') / 2;
+    c_tr = trace(C_ep) / N_chans;
+    if c_tr > 0
+        C_ep = (1 - 1e-9) * C_ep + (1e-9 * c_tr) * refCOV_reg;
+    end
     [Evec_sub(:, :, epo), Eval_sub(:, :, epo)] = eig(C_ep, refCOV_reg, 'chol');
 end
 m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, -4);
@@ -299,7 +299,8 @@ end
 
 k_start = max(2, N_chans - (M^3) + 1);
 active_evals = all_evals_mat(k_start:end, topq_mask);
-pos_evals = log(active_evals(active_evals > 0));
+ev_floor = 1e-6 * median(peak_ev(topq_mask));
+pos_evals = log(active_evals(active_evals > ev_floor));
 if numel(pos_evals) >= 2
     iqr_log = max(0.5, prctile(pos_evals, 75) - prctile(pos_evals, 25));
 else
