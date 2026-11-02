@@ -34,7 +34,13 @@ for i = 1:num_epochs
 end
 % Use the magnitude (a real value) for all subsequent calculations.
 magnitudes = abs(all_diagonals);
-log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
+max_mag = max(magnitudes);
+if max_mag > 0
+    valid_mags = max(magnitudes, max(1e-12 * max_mag, 1e-30));
+else
+    valid_mags = magnitudes(magnitudes > 0);
+end
+log_Eig_val_all = log(valid_mags) + 100;
 
 
 %% Artifacting multiplication factor T1
@@ -105,7 +111,12 @@ for i = 1:num_epochs
         P_bad = refCOV_reg * W_bad;
         
         if enable_spatial_shield
-            ep_med_ev = median(ev_i(ev_i > 0));
+            active_ev_i = ev_i(ev_i > max(1e-6 * max(ev_i), 1e-12));
+            if isempty(active_ev_i)
+                ep_med_ev = median(ev_i(ev_i > 0));
+            else
+                ep_med_ev = median(active_ev_i);
+            end
             for k = 1:numel(bad_cols)
                 c_idx = bad_cols(k);
                 ev_ep_r = ev_i(c_idx) / max(ep_med_ev, 1e-12);

@@ -48,7 +48,13 @@ all_indices = base_diag + (0 : num_epochs-1) * num_chans^2;
 all_diagonals = Eval(all_indices(:));
 magnitudes = abs(all_diagonals);
 all_evals_mat = reshape(magnitudes, num_chans, num_epochs);
-log_Eig_val_all = log(magnitudes(magnitudes > 0)) + 100;
+max_mag = max(magnitudes);
+if max_mag > 0
+    valid_mags = max(magnitudes, max(1e-12 * max_mag, 1e-30));
+else
+    valid_mags = magnitudes(magnitudes > 0);
+end
+log_Eig_val_all = log(valid_mags) + 100;
 
 correction_factor = 1.00;
 T1 = correction_factor * (105 - artifact_threshold) / 100;
@@ -68,8 +74,9 @@ reg_val = trace(refCOV) / num_chans;
 refCOV_reg = (1-regularization_lambda)*refCOV + regularization_lambda*reg_val*eye(num_chans, 'like', refCOV);
 refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
 
-% Precompute constant T
+% Precompute constant T and standard basis completion
 T = refCOV_reg * Template_guess;
+I_chans_M = eye(num_chans, M, 'like', refCOV_reg);
 
 SIGNAL_subspace_similarity_distribution = zeros(1, num_epochs);
 NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
@@ -77,9 +84,10 @@ tol = 1e-12;
 
 for epoch = 1:num_epochs
     current_evals = all_evals_mat(:, epoch);
-    bad_indices = current_evals >= threshold_val;
+    active_mask = current_evals > max(1e-7 * max(current_evals), tol);
+    bad_indices = (current_evals >= threshold_val) & active_mask;
     num_bad = sum(bad_indices);
-    good_indices = ~bad_indices;
+    good_indices = (~bad_indices) & active_mask;
     num_good = sum(good_indices);
 
     % --- SIGNAL SUBSPACE ---
@@ -94,20 +102,20 @@ for epoch = 1:num_epochs
         [evecs_signal, ~] = qr(Y2_sig, 0);
         SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
     elseif num_good > 0
-        % Fallback for rank-deficient signal
+        % Exact full-rank subspace iteration on num_good active columns, completed
+        % deterministically with standard basis columns (zero floating-point roundoff amplification)
         Evec_good = Evec(:, good_indices, epoch);
         d_good = current_evals(good_indices);
-        V_good_rows = Evec_good' * refCOV_reg;
-        cov_signal = V_good_rows' * (V_good_rows .* d_good);
-        cov_signal = (cov_signal + cov_signal') / 2;
-        Y1_sig = cov_signal * Template_guess;
-        [Q1_sig, ~] = qr(Y1_sig, 0);
-        Y2_sig = cov_signal * Q1_sig;
-        [evecs_signal, ~] = qr(Y2_sig, 0);
+        Y1_g = refCOV_reg * (Evec_good * (d_good .* (Evec_good' * T(:, 1:num_good))));
+        [Q1_g, ~] = qr(Y1_g, 0);
+        T_g = refCOV_reg * Q1_g;
+        Y2_g = refCOV_reg * (Evec_good * (d_good .* (Evec_good' * T_g)));
+        [Q2_g, ~] = qr(Y2_g, 0);
+        [evecs_signal, ~] = qr([Q2_g, I_chans_M(:, num_good+1:M)], 0);
         SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
     else
         % No good components
-        evecs_signal = eye(num_chans, M);
+        evecs_signal = I_chans_M;
         SIGNAL_subspace_similarity_distribution(epoch) = abs(det(evecs_signal' * Template_guess));
     end
 
@@ -146,21 +154,17 @@ for epoch = 1:num_epochs
             s_bad = svd(Q_bad' * Template_guess);
             NOISE_subspace_similarity_distribution(epoch) = 0.88 * nsi_det + 0.12 * sum(s_bad.^6);
         elseif num_bad > 0
-            % Fallback for rank-deficient noise
+            % Exact full-rank subspace iteration on num_bad columns, completed
+            % deterministically with standard basis columns (matches exact Householder QR
+            % without dividing by 1e-16 rank-deficient floating-point roundoff)
             Evec_bad = Evec(:, bad_indices, epoch);
             d_bad = current_evals(bad_indices);
-            V_bad_rows = Evec_bad' * refCOV_reg;
-            cov_noise = V_bad_rows' * (V_bad_rows .* d_bad);
-            cov_noise = (cov_noise + cov_noise') / 2;
-            
-            if max(abs(cov_noise(:))) < tol
-                Y1_noise = eye(num_chans, M);
-            else
-                Y1_noise = cov_noise * Template_guess;
-            end
-            [Q1_noise, ~] = qr(Y1_noise, 0);
-            Y2_noise = cov_noise * Q1_noise;
-            [evecs_noise, ~] = qr(Y2_noise, 0);
+            Y1_b = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T(:, 1:num_bad))));
+            [Q1_b, ~] = qr(Y1_b, 0);
+            T_b = refCOV_reg * Q1_b;
+            Y2_b = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_b)));
+            [Q2_b, ~] = qr(Y2_b, 0);
+            [evecs_noise, ~] = qr([Q2_b, I_chans_M(:, num_bad+1:M)], 0);
             nsi_det = abs(det(evecs_noise' * Template_guess));
             P_bad = refCOV_reg * Evec_bad;
             [Q_bad, ~] = qr(P_bad, 0);
@@ -168,7 +172,7 @@ for epoch = 1:num_epochs
             NOISE_subspace_similarity_distribution(epoch) = 0.88 * nsi_det + 0.12 * sum(s_bad.^6);
         else
             % No bad components
-            evecs_noise = eye(num_chans, M);
+            evecs_noise = I_chans_M;
             NOISE_subspace_similarity_distribution(epoch) = abs(det(evecs_noise' * Template_guess));
         end
     end

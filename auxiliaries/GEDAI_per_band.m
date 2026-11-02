@@ -170,13 +170,18 @@ if ~isinf(smoothing_window_seconds)
         Evec_sub = zeros(N_EEG_electrodes, N_EEG_electrodes, w_len, 'like', eeg_data);
         Eval_sub = zeros(N_EEG_electrodes, N_EEG_electrodes, w_len, 'like', eeg_data);
         for i = 1:w_len
-            COV_sub(:,:,i) = (COV_sub(:,:,i) + COV_sub(:,:,i)') / 2;
-            [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(COV_sub(:,:,i), refCOV_reg, 'chol');
+            c_ep = (COV_sub(:,:,i) + COV_sub(:,:,i)') / 2;
+            c_tr = trace(c_ep) / N_EEG_electrodes;
+            if c_tr > 0
+                c_ep = (1 - 1e-9) * c_ep + (1e-9 * c_tr) * refCOV_reg;
+            end
+            COV_sub(:,:,i) = c_ep;
+            [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(c_ep, refCOV_reg, 'chol');
         end
         
         if is_auto_threshold && strcmpi(signal_type, 'eeg')
             noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
-                Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold);
+                Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold, epoch_samples);
         end
         
         switch optimization_type
@@ -267,6 +272,10 @@ if ~isinf(smoothing_window_seconds)
         for i = 1:c_len
             cov_epoch = cov(EEGdata_epoched_chunk(:,:,i)');
             cov_epoch = (cov_epoch + cov_epoch') / 2;
+            c_tr = trace(cov_epoch) / N_EEG_electrodes;
+            if c_tr > 0
+                cov_epoch = (1 - 1e-9) * cov_epoch + (1e-9 * c_tr) * refCOV_reg;
+            end
             [Evec_chunk(:,:,i), Eval_chunk(:,:,i)] = eig(cov_epoch, refCOV_reg, 'chol');
         end
         
@@ -283,7 +292,13 @@ if ~isinf(smoothing_window_seconds)
         all_diagonals = Eval_chunk(all_indices(:));
         magnitudes = abs(all_diagonals);
         all_evals_chunk = reshape(magnitudes, N_EEG_electrodes, c_len);
-        log_Eig_val_chunk = log(magnitudes(magnitudes > 0)) + 100;
+        max_mag_chunk = max(magnitudes);
+        if max_mag_chunk > 0
+            valid_mags_chunk = max(magnitudes, max(1e-12 * max_mag_chunk, 1e-30));
+        else
+            valid_mags_chunk = magnitudes(magnitudes > 0);
+        end
+        log_Eig_val_chunk = log(valid_mags_chunk) + 100;
         
         correction_factor = 1.00;
         T1 = correction_factor * (105 - mean_thresh) / 100;
@@ -306,9 +321,10 @@ if ~isinf(smoothing_window_seconds)
         for i = 1:c_len
             global_epo_idx = c_start + i - 1;
             current_evals = all_evals_chunk(:, i);
-            bad_indices = current_evals >= threshold_val;
+            active_mask = current_evals > max(1e-7 * max(current_evals), tol_val);
+            bad_indices = (current_evals >= threshold_val) & active_mask;
             num_bad = sum(bad_indices);
-            good_indices = ~bad_indices;
+            good_indices = (~bad_indices) & active_mask;
             num_good = sum(good_indices);
             
             % --- SIGNAL SUBSPACE ---
@@ -322,21 +338,8 @@ if ~isinf(smoothing_window_seconds)
                 Y2_sig = refCOV_reg * (Evec_good * (d_good .* (Evec_good' * T_sig)));
                 [evecs_signal, ~] = qr(Y2_sig, 0);
                 SIGNAL_subspace_dist(global_epo_idx) = abs(det(evecs_signal' * Template_guess));
-            elseif num_good > 0
-                % Fallback for rank-deficient signal
-                Evec_good = Evec_chunk(:, good_indices, i);
-                d_good = current_evals(good_indices);
-                V_good_rows = Evec_good' * refCOV_reg;
-                cov_signal = V_good_rows' * (V_good_rows .* d_good);
-                cov_signal = (cov_signal + cov_signal') / 2;
-                Y1_sig = cov_signal * Template_guess;
-                [Q1_sig, ~] = qr(Y1_sig, 0);
-                Y2_sig = cov_signal * Q1_sig;
-                [evecs_signal, ~] = qr(Y2_sig, 0);
-                SIGNAL_subspace_dist(global_epo_idx) = abs(det(evecs_signal' * Template_guess));
             else
-                evecs_signal = eye(N_EEG_electrodes, M_proj);
-                SIGNAL_subspace_dist(global_epo_idx) = abs(det(evecs_signal' * Template_guess));
+                SIGNAL_subspace_dist(global_epo_idx) = 0;
             end
             
             % --- NOISE SUBSPACE ---
@@ -352,7 +355,7 @@ if ~isinf(smoothing_window_seconds)
                     NOISE_subspace_dist(global_epo_idx) = 0;
                 end
             else
-                % Subspace Volume Determinant (Optimal for EEG)
+                % Subspace Volume Determinant + Rank-1 Dipolar Rhythm Guardrail (Optimal for EEG)
                 if num_bad >= M_proj
                     % Fast associative path
                     Evec_bad = Evec_chunk(:, bad_indices, i);
@@ -362,24 +365,17 @@ if ~isinf(smoothing_window_seconds)
                     T_noise = refCOV_reg * Q1_noise;
                     Y2_noise = refCOV_reg * (Evec_bad * (d_bad .* (Evec_bad' * T_noise)));
                     [evecs_noise, ~] = qr(Y2_noise, 0);
-                    NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                    nsi_det = abs(det(evecs_noise' * Template_guess));
+                    P_bad = refCOV_reg * Evec_bad;
+                    [Q_bad, ~] = qr(P_bad, 0);
+                    s_bad = svd(Q_bad' * Template_guess);
+                    NOISE_subspace_dist(global_epo_idx) = 0.88 * nsi_det + 0.12 * sum(s_bad.^6);
                 elseif num_bad > 0
-                    % Fallback for rank-deficient noise
                     Evec_bad = Evec_chunk(:, bad_indices, i);
-                    d_bad = current_evals(bad_indices);
-                    V_bad_rows = Evec_bad' * refCOV_reg;
-                    cov_noise = V_bad_rows' * (V_bad_rows .* d_bad);
-                    cov_noise = (cov_noise + cov_noise') / 2;
-                    
-                    if max(abs(cov_noise(:))) < tol_val
-                        Y1_noise = eye(N_EEG_electrodes, M_proj);
-                    else
-                        Y1_noise = cov_noise * Template_guess;
-                    end
-                    [Q1_noise, ~] = qr(Y1_noise, 0);
-                    Y2_noise = cov_noise * Q1_noise;
-                    [evecs_noise, ~] = qr(Y2_noise, 0);
-                    NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
+                    P_bad = refCOV_reg * Evec_bad;
+                    [Q_bad, ~] = qr(P_bad, 0);
+                    s_bad = svd(Q_bad' * Template_guess);
+                    NOISE_subspace_dist(global_epo_idx) = 0.12 * sum(s_bad.^6);
                 else
                     evecs_noise = eye(N_EEG_electrodes, M_proj);
                     NOISE_subspace_dist(global_epo_idx) = abs(det(evecs_noise' * Template_guess));
@@ -408,6 +404,10 @@ if ~isinf(smoothing_window_seconds)
         for i = 1:c_len
             cov_epoch = cov(EEGdata_epoched_chunk(:,:,i)');
             cov_epoch = (cov_epoch + cov_epoch') / 2;
+            c_tr = trace(cov_epoch) / N_EEG_electrodes;
+            if c_tr > 0
+                cov_epoch = (1 - 1e-9) * cov_epoch + (1e-9 * c_tr) * refCOV_reg;
+            end
             [Evec_chunk(:,:,i), Eval_chunk(:,:,i)] = eig(cov_epoch, refCOV_reg, 'chol');
         end
         
@@ -604,7 +604,7 @@ else
         
         if is_auto_threshold && strcmpi(signal_type, 'eeg')
             noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
-                Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold);
+                Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold, epoch_samples);
         end
         
         switch optimization_type
@@ -787,7 +787,7 @@ memory_limited_chunk_size = max(1, floor(target_chunk_bytes / max(estimated_scal
 chunk_size = max(1, min(time_limited_chunk_size, memory_limited_chunk_size));
 end
 
-function m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold)
+function m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold, epoch_samples)
 % Closed-form zero-parameter Z3_SENSAI_Pure noise multiplier law:
 %   Broadband (minThreshold == -4):
 %     excess_iqr = max(1, iqr_log / (M - 1))
@@ -806,6 +806,9 @@ M = max(1, SSI_top_PCs);
 if N_chans <= 2 || w_len < 1
     m_eff = double(M);
     return;
+end
+if nargin < 7 || isempty(epoch_samples)
+    epoch_samples = (M^3) * N_chans;
 end
 
 all_evals_mat = zeros(N_chans, w_len);
@@ -832,9 +835,15 @@ if ~any(topq_mask)
     topq_mask = true(1, w_len);
 end
 
-k_start = max(2, N_chans - (M^3) + 1);
+if N_chans <= M^3
+    n_dof = min(M^3, floor(epoch_samples / (M + 1)));
+else
+    n_dof = M^3;
+end
+k_start = max(2, N_chans - n_dof + 1);
 active_evals = all_evals_mat(k_start:end, topq_mask);
-pos_evals = log(active_evals(active_evals > 0));
+ev_floor = 1e-6 * median(peak_ev(topq_mask));
+pos_evals = log(active_evals(active_evals > ev_floor));
 if numel(pos_evals) >= 2
     iqr_log = max(0.5, prctile(pos_evals, 75) - prctile(pos_evals, 25));
 else
@@ -844,20 +853,31 @@ end
 PR = mean(part_ratios(topq_mask));
 c1 = max(0.15, min(0.95, mean(top1_cos(topq_mask))));
 M_d = double(M);
+m_min = M_d / max(M_d - 1.0, 1.0);
 
 if minThreshold == -4
     scale_factor = double(N_chans) / (M_d^2);
     excess_iqr = max(1.0, iqr_log / (M_d - 1.0));
     m_raw = (scale_factor * PR) / ((iqr_log^2) * c1 * (excess_iqr^2));
-    m_floor = max(M_d / max(M_d - 1.0, 1.0), (M_d - 1.0) / (excess_iqr^3));
+    m_floor = max(m_min, (M_d - 1.0) / (excess_iqr^3));
     m_eff = max(m_floor, min(1.5 * M_d, m_raw));
 else
     c1_floor = (M_d - 1.0) / M_d;
-    w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)));
-    iqr_ref = M_d - w_nondip;
-    excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
-    m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
-    m_floor = max(M_d / max(M_d - 1.0, 1.0), M_d / (excess_iqr^3));
-    m_eff = max(m_floor, min(1.5 * M_d, m_raw));
+    if (N_chans <= M^3) && (epoch_samples <= (M_d + 1.0) * N_chans)
+        w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)) * min(1.0, M_d / PR));
+        iqr_ref = M_d - w_nondip;
+        excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
+        iso_boost = max(1.0, (PR / M_d)^2);
+        m_raw = (M_d * PR * iso_boost) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
+        m_floor = max(m_min, (M_d - (M_d - m_min) * w_nondip) / (excess_iqr^3));
+        m_eff = max(m_floor, min(M_d^2, m_raw));
+    else
+        w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)));
+        iqr_ref = M_d - w_nondip;
+        excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
+        m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
+        m_floor = max(m_min, M_d / (excess_iqr^3));
+        m_eff = max(m_floor, min(1.5 * M_d, m_raw));
+    end
 end
 end

@@ -2104,6 +2104,10 @@ else
         for e = 1:N_ep
             C_ep = cov(wb_ep(:, :, e)');
             C_ep = (C_ep + C_ep') / 2;
+            c_tr = trace(C_ep) / N_ch;
+            if c_tr > 0
+                C_ep = (1 - 1e-9) * C_ep + (1e-9 * c_tr) * refCOV_reg;
+            end
             [Ec, Ev] = eig(C_ep, refCOV_reg, 'chol');
             ev_r = abs(double(diag(Ev)));
             [ev_s, ord] = sort(ev_r, 'ascend');
@@ -2117,9 +2121,15 @@ else
         pk = all_ev(end, :);
         tmask = (pk >= median(pk));
         if ~any(tmask), tmask = true(1, N_ep); end
-        k_start = max(2, N_ch - (round(M_d)^3) + 1);
+        if N_ch <= round(M_d)^3
+            n_dof = min(round(M_d)^3, floor(ep_s / (M_d + 1.0)));
+        else
+            n_dof = round(M_d)^3;
+        end
+        k_start = max(2, N_ch - n_dof + 1);
         act = all_ev(k_start:end, tmask);
-        pos = log(act(act > 0));
+        ev_fl = 1e-6 * median(pk(tmask));
+        pos = log(act(act > ev_fl));
         if numel(pos) >= 2
             iqr_l = max(0.5, prctile(pos, 75) - prctile(pos, 25));
         else
@@ -2127,12 +2137,22 @@ else
         end
         PRm = mean(pr(tmask));
         c1m = max(0.15, min(0.95, mean(c1v(tmask))));
-        w_nd = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)));
-        iqr_ref = M_d - w_nd;
-        ex_iqr  = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
-        m_raw   = (M_d * PRm) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
-        m_floor = max(m_min, M_d / (ex_iqr^3));
-        m_eff_vec(f) = max(m_floor, min(1.5 * M_d, m_raw));
+        if (N_ch <= round(M_d)^3) && (ep_s <= (M_d + 1.0) * N_ch)
+            w_nd = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)) * min(1.0, M_d / PRm));
+            iqr_ref = M_d - w_nd;
+            ex_iqr  = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
+            iso_boost = max(1.0, (PRm / M_d)^2);
+            m_raw   = (M_d * PRm * iso_boost) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
+            m_floor = max(m_min, (M_d - (M_d - m_min) * w_nd) / (ex_iqr^3));
+            m_eff_vec(f) = max(m_floor, min(M_d^2, m_raw));
+        else
+            w_nd = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)));
+            iqr_ref = M_d - w_nd;
+            ex_iqr  = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
+            m_raw   = (M_d * PRm) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
+            m_floor = max(m_min, M_d / (ex_iqr^3));
+            m_eff_vec(f) = max(m_floor, min(1.5 * M_d, m_raw));
+        end
     end
     cached_sig   = sig_vec;
     cached_m_eff = m_eff_vec;
