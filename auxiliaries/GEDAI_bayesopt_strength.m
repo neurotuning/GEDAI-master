@@ -39,9 +39,9 @@ if nargin < 11 || isempty(parallelize), parallelize = false; end
 data = double(data);
 [nbchan, pnts] = size(data);
 
-% Subsample up to 20 seconds using 3 representative blocks (early/mid/late)
+% Subsample up to 100 seconds using 3 representative blocks (early/mid/late)
 % with cosine-tapered seams for fast evaluation on long recordings
-max_opt_sec = 20;
+max_opt_sec = 100;
 max_opt_pnts = min(pnts, round(max_opt_sec * srate));
 if pnts > round(max_opt_pnts * 1.25)
     blk_len = floor(max_opt_pnts / 3);
