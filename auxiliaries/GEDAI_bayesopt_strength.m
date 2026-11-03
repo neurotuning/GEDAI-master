@@ -186,7 +186,7 @@ end
         end
         [sen_v, en_v] = eval_autoscale_metrics(sc_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
         en_norm = max(0.10, en_margin_clean * (1.0 - w_dirty_rec) + w_dirty_rec);
-        w_bal_v = (1.0 - w_rank_rec) * (1.0 - w_dirty_rec) * w_hi_meff_rec * exp(-0.5 * ((sc_val - 0.65) / 0.08)^2);
+        w_bal_v = (1.0 - w_rank_rec) * (1.0 - w_dirty_rec) * w_hi_meff_rec * max(0.0, 1.0 - ((sc_val - 0.65) / 0.10)^2);
         w_rel_v = ((1.0 - w_dirty_rec)^2) * max(w_rank_rec, 0.35 * (1.0 - w_hi_meff_rec)) * max(0, min(sc_val, 1.0) - 0.5);
         w_agg_v = w_dirty_rec * max(0.0, 0.50 - sc_val) / 0.30;
         w_pen_v = (1.0 - w_dirty_rec) * max(0.0, 0.50 - sc_val) / 0.10;
@@ -237,7 +237,7 @@ try
             r_sub_rec  = (M_d_rec^3) / max(double(EEG_in.nbchan - 1), 1.0);
             w_ch_dof   = 1.0 ./ (1.0 + exp(-(r_sub_rec - 0.85) / 0.08));
             w_ch_dof_g = 1.0 ./ (1.0 + exp(-(r_sub_rec - 1.25) / 0.08));
-            w_hi_meff  = (1.0 - w_ch_dof) * max(0.0, min(1.0, (meff_eeg_rec - (M_d_rec - 0.5)) / max(0.5 * M_d_rec, 1e-12)));
+            w_hi_meff  = (1.0 - w_ch_dof) * max(0.0, min(1.0, (meff_eeg_rec - (M_d_rec - 0.5)) / max(0.4 * M_d_rec, 1e-12)));
             w_dip_eog  = 1.0 ./ (1.0 + exp(-(dip_frac_z3 - 0.65) / 0.030));
             w_z3_low   = 1.0 ./ (1.0 + exp((raw_z3 - 3.35) / 0.25));
             w_en_50    = 1.0 ./ (1.0 + exp(-(enova_pct - 50.0) / 5.0));

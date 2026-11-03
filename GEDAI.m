@@ -2202,7 +2202,7 @@ else
 
     r_sub_g    = (M_d^3) / max(double(N_ch - 1), 1.0);
     w_ch_dof_g = 1.0 ./ (1.0 + exp(-(r_sub_g - 0.85) / 0.08));
-    w_hi_meff  = (1.0 - w_ch_dof_g) * max(0.0, min(1.0, (m_eff_eeg - (M_d - 0.5)) / max(0.5 * M_d, 1e-12)));
+    w_hi_meff  = (1.0 - w_ch_dof_g) * max(0.0, min(1.0, (m_eff_eeg - (M_d - 1.0)) / max(0.4 * M_d, 1e-12)));
 
     w_tail     = 1.0 ./ (1.0 + exp((log_tail + 3.85) / 0.10));
     w_mid_tail = 1.0 ./ (1.0 + exp((log_mid_tail + 1.85) / 0.08));
@@ -2253,8 +2253,8 @@ if is_auto_mode
 else
     r_sub_g      = (M_d^3) / max(double(N_ch - 1), 1.0);
     w_ch_dof_g   = 1.0 ./ (1.0 + exp(-(r_sub_g - 0.85) / 0.08));
-    w_bal        = (1.0 - w_rank) * exp(-0.5 * ((sc_opt - 0.65) / 0.08)^2);
-    w_hi_meff    = (1.0 - w_ch_dof_g) * max(0.0, min(1.0, (m_eff_eeg - (M_d - 0.5)) / max(0.5 * M_d, 1e-12)));
+    w_bal        = (1.0 - w_rank) * max(0.0, 1.0 - ((sc_opt - 0.65) / 0.10)^2);
+    w_hi_meff    = (1.0 - w_ch_dof_g) * max(0.0, min(1.0, (m_eff_eeg - (M_d - 1.0)) / max(0.4 * M_d, 1e-12)));
     w_alpha_gate = max(w_macro, (1.0 - s_hi) * (1.0 - w_rank));
     w_dip_3s     = w_bal * w_hi_meff;
     if w_dip_3s > 1e-6
