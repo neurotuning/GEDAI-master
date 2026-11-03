@@ -1,8 +1,8 @@
 function [best_scale, best_SENSAI, opt_results, selected_threshold_type] = GEDAI_bayesopt_strength(data, srate, chanlocs, ref_matrix, max_evals, verbose, plot_opt, signal_type, epoch_size_in_cycles, lowcut_frequency, parallelize)
 % GEDAI_BAYESOPT_STRENGTH - Bayesian Optimization (bayesopt) over the auto_scale
-% denoising multiplier in [0.1, 5.0] (from 0.1x most aggressive to 5.0x least
-% aggressive relative to 'auto' = 1.0x), preserving per-band Z3 spectral-spatial
-% adaptation across Pass 1 (Broadband) and Pass 2 (Wavelets).
+% denoising strength in [0.1, 10.0] (from 0.1x least aggressive to 10.0x most
+% aggressive relative to 'auto-' = 1.0x, 'auto' = 2.0x, 'auto+' = 3.0x), preserving
+% per-band Z3 spectral-spatial adaptation across Pass 1 (Broadband) and Pass 2 (Wavelets).
 %
 % Outer evaluation uses SENSAI_basic with noise_multiplier = local_compute_z3_noise_multiplier(...)
 % computed once on the input recording (without auto_scale). After optimization,
@@ -23,10 +23,10 @@ function [best_scale, best_SENSAI, opt_results, selected_threshold_type] = GEDAI
 %   parallelize             - Boolean to run each GEDAI evaluation in parallel (default = false)
 %
 % Outputs:
-%   best_scale              - Optimal auto_scale multiplier in [0.1, 5.0] (1.0 = 'auto')
-%   best_SENSAI             - Outer SENSAI_basic score (%) at the selected multiplier
+%   best_scale              - Optimal denoising strength in [0.1, 10.0] (1.0 = 'auto-', 2.0 = 'auto', 3.0 = 'auto+')
+%   best_SENSAI             - Outer SENSAI_basic score (%) at the selected strength
 %   opt_results             - Optimization results struct (including bayesopt object)
-%   selected_threshold_type - 'auto:<best_scale>' if it beats 'auto', else 'auto'
+%   selected_threshold_type - 'auto:<best_scale>' if it beats 'auto' (2.0x), else 'auto:2.000000'
 
 if nargin < 5 || isempty(max_evals), max_evals = 12; end
 if nargin < 6 || isempty(verbose), verbose = 1; end
@@ -67,30 +67,30 @@ EEG_eval.etc = struct('GEDAI_use_cached_invariants', true);
 
 if verbose
     fprintf('\n=== GEDAI: Bayesian Optimization (bayesopt) of Denoising Strength ===\n');
-    fprintf('  Sweeping auto_scale multiplier in [0.10x (most aggressive) .. 5.00x (least aggressive)]\n');
-    fprintf('  Baseline anchor: ''auto'' (0.50x) | ''auto+'' (0.33x) | ''auto-'' (1.00x)\n');
+    fprintf('  Sweeping log-scaled denoising strength in [0.10x (least aggressive) .. 10.00x (most aggressive)]\n');
+    fprintf('  Baseline anchor: ''auto-'' (6.00x) | ''auto'' (7.00x) | ''auto+'' (8.00x)\n');
 end
 
 warn_state = warning('off');
 clean_up = onCleanup(@() warning(warn_state));
 
-% Step 0: Evaluate 'auto' (0.50x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
+% Step 0: Evaluate 'auto' (7.00x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
 outer_noise_multiplier = [];
-[sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec, w_hi_meff_rec] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
+[sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec, w_hi_meff_rec] = eval_autoscale_metrics(7.0, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
 en_margin_clean = 0.05 + 2.0 * w_rank_rec;
 en_cap_clean    = en_auto + en_margin_clean;
 en_cap_dirty    = max(55.0, en_auto + 12.0);
 en_cap          = (1.0 - w_dirty_rec) * en_cap_clean + w_dirty_rec * en_cap_dirty;
 
-eval_hist_scale  = 0.5;
+eval_hist_scale  = 7.0;
 eval_hist_sensai = sensai_auto;
 eval_hist_enova  = en_auto;
-eval_hist_obj    = sensai_auto; % At 0.50x ('auto'), ENOVA penalty is 0
+eval_hist_obj    = sensai_auto; % At 7.00x ('auto'), ENOVA penalty is 0
 
-% Initial log-spaced anchor seeds across the trust region around 'auto' (0.50x)
-default_seeds = [0.20; 1/3; 0.42; 0.65; 1.00; 1.50];
+% Initial log-spaced anchor seeds across the trust region around 'auto' (7.00x)
+default_seeds = local_sc_to_strength([0.20; 1/3; 0.42; 0.65; 1.00; 1.50]);
 if verbose == 0 && ~plot_opt
-    default_seeds = [0.20; 1/3; 0.42; 0.65; 1.00];
+    default_seeds = local_sc_to_strength([0.20; 1/3; 0.42; 0.65; 1.00]);
 end
 n_init = min(numel(default_seeds), max(1, max_evals - 1));
 init_scales = default_seeds(1:n_init);
@@ -99,7 +99,7 @@ rem_budget = max(1, max_evals - 1);
 use_bayesopt = (verbose > 0 || plot_opt) && ( exist('bayesopt', 'file') == 2 || exist('bayesopt', 'class') == 8 ) && (rem_budget >= 4);
 
 if use_bayesopt
-    scale_var = optimizableVariable('auto_scale', [0.10, 5.00], 'Type', 'real', 'Transform', 'log');
+    scale_var = optimizableVariable('auto_scale', [0.10, 10.00], 'Type', 'real');
     init_table = table(init_scales, 'VariableNames', {'auto_scale'});
     bo_obj = @(T) bayesopt_tracked_objective(T.auto_scale);
     try
@@ -128,14 +128,14 @@ best_scale  = eval_hist_scale(best_idx);
 best_SENSAI = eval_hist_sensai(best_idx);
 best_ENOVA  = eval_hist_enova(best_idx);
 
-% Monotonic baseline guarantee: if no candidate strictly beats 'auto' (0.50x), retain 'auto'
-if best_obj_val > sensai_auto + 1e-6 && abs(best_scale - 0.5) > 1e-3
+% Monotonic baseline guarantee: if no candidate strictly beats 'auto' (7.00x), retain 'auto'
+if best_obj_val > sensai_auto + 1e-6 && abs(best_scale - 7.0) > 1e-3
     selected_threshold_type = sprintf('auto:%.6f', best_scale);
 else
-    best_scale  = 0.5;
+    best_scale  = 7.0;
     best_SENSAI = sensai_auto;
     best_ENOVA  = en_auto;
-    selected_threshold_type = 'auto:0.500000';
+    selected_threshold_type = 'auto:7.000000';
 end
 
 opt_results = struct();
@@ -155,44 +155,48 @@ opt_results.NumEvaluations        = numel(eval_hist_scale);
 opt_results.BayesOptResults       = bo_res;
 
 if plot_opt
-    figure('Color', 'w', 'Name', 'GEDAI Strength Optimization (bayesopt 0.1x - 5.0x)');
+    figure('Color', 'w', 'Name', 'GEDAI Strength Optimization (bayesopt 0.1x - 10.0x)');
     [xs, ord] = sort(eval_hist_scale);
     ys = eval_hist_obj(ord);
-    semilogx(xs, ys, '-o', 'LineWidth', 1.8, 'MarkerSize', 6);
+    plot(xs, ys, '-o', 'LineWidth', 1.8, 'MarkerSize', 6);
     hold on;
-    yline(sensai_auto, '--k', sprintf('''auto'' (0.50x) baseline (%.2f%%)', sensai_auto), 'LineWidth', 1.2);
-    semilogx(best_scale, best_obj_val, 'rp', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
-    xlabel('Denoising Multiplier auto\_scale (0.1x = most aggressive, 5.0x = least aggressive)');
+    yline(sensai_auto, '--k', sprintf('''auto'' (7.00x) baseline (%.2f%%)', sensai_auto), 'LineWidth', 1.2);
+    plot(best_scale, best_obj_val, 'rp', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
+    xlabel('Log-Scaled Denoising Strength (0.1x = least aggressive, 6x = auto-, 7x = auto, 8x = auto+, 10x = max)');
     ylabel(sprintf('Outer SENSAI\\_basic Objective (%%) [Z3 mult = %.2f]', outer_noise_multiplier));
-    title(sprintf('Optimal auto\\_scale = %.2fx (Outer SENSAI = %.2f%%, ENOVA = %.1f%%)', best_scale, best_SENSAI, best_ENOVA));
+    title(sprintf('Optimal Strength = %.2fx (Outer SENSAI = %.2f%%, ENOVA = %.1f%%)', best_scale, best_SENSAI, best_ENOVA));
     grid on;
 end
 
 if verbose
     fprintf('  Outer Z3 noise_multiplier:    %.2f (fixed across all candidate evaluations)\n', outer_noise_multiplier);
-    fprintf('  Baseline ''auto'' (0.50x):      Outer SENSAI = %+.2f%% | ENOVA = %.1f%% (Ceiling = %.1f%%)\n', sensai_auto, en_auto, en_cap);
-    fprintf('  Selected Optimal Multiplier:  auto_scale* = %.2fx (%d evals)\n', best_scale, opt_results.NumEvaluations);
+    fprintf('  Baseline ''auto'' (7.00x):      Outer SENSAI = %+.2f%% | ENOVA = %.1f%% (Ceiling = %.1f%%)\n', sensai_auto, en_auto, en_cap);
+    fprintf('  Selected Optimal Strength:    auto_scale* = %.2fx (%d evals)\n', best_scale, opt_results.NumEvaluations);
     fprintf('  Selected Outer SENSAI/ENOVA:  Outer SENSAI = %+.2f%% | ENOVA = %.1f%%\n', best_SENSAI, best_ENOVA);
     fprintf('=====================================================================\n\n');
 end
 
-    function neg_obj = bayesopt_tracked_objective(sc_val)
-        sc_val = max(0.10, min(5.00, double(sc_val)));
+    function neg_obj = bayesopt_tracked_objective(str_val)
+        str_val = max(0.10, min(10.00, double(str_val)));
         % Reuse cached value if already evaluated within 1e-4
-        [min_diff, idx_hit] = min(abs(eval_hist_scale - sc_val));
+        [min_diff, idx_hit] = min(abs(eval_hist_scale - str_val));
         if min_diff < 1e-4
             neg_obj = -eval_hist_obj(idx_hit);
             return;
         end
-        [sen_v, en_v] = eval_autoscale_metrics(sc_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
-        en_norm = max(0.10, en_margin_clean * (1.0 - w_dirty_rec) + w_dirty_rec);
-        w_bal_v = (1.0 - w_rank_rec) * (1.0 - w_dirty_rec) * w_hi_meff_rec * max(0.0, 1.0 - ((sc_val - 0.65) / 0.10)^2);
-        w_rel_v = ((1.0 - w_dirty_rec)^2) * max(w_rank_rec, 0.35 * (1.0 - w_hi_meff_rec)) * max(0, min(sc_val, 1.0) - 0.5);
-        w_agg_v = w_dirty_rec * max(0.0, 0.50 - sc_val) / 0.30;
-        w_pen_v = (1.0 - w_dirty_rec) * max(0.0, 0.50 - sc_val) / 0.10;
-        en_cap_v = en_cap + 25.0 * w_bal_v;
-        obj_v = sen_v + 36.0 * w_rel_v + 12.0 * w_bal_v + 15.0 * w_agg_v - 10.0 * w_pen_v - 3.0 * (max(0, en_v - en_cap_v) / max(en_norm, 2.0 * w_bal_v))^1.5;
-        eval_hist_scale(end+1, 1)  = sc_val;
+        [sen_v, en_v] = eval_autoscale_metrics(str_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
+        sc_val   = local_strength_to_sc(str_val);
+        en_norm  = max(1.50, en_margin_clean * (1.0 - w_dirty_rec) + 4.0 * w_dirty_rec);
+        w_bal_v  = (1.0 - w_rank_rec) * (1.0 - w_dirty_rec) * w_hi_meff_rec * max(0.0, 1.0 - ((sc_val - 0.65) / 0.10)^2);
+        w_rel_v  = ((1.0 - w_dirty_rec)^2) * max(w_rank_rec, 0.35 * (1.0 - w_hi_meff_rec)) * max(0.0, min(sc_val, 1.0) - 0.5) * max(0.0, 1.0 - 2.0 * max(0.0, sc_val - 1.0));
+        w_agg_v  = w_dirty_rec * max(0.0, 0.50 - sc_val) / 0.30;
+        w_pen_v  = (1.0 - w_dirty_rec) * max(0.0, 0.50 - sc_val) / 0.10;
+        w_low_v  = max(0.0, 6.00 - str_val);
+        w_gentle = max(w_bal_v, (1.0 - w_dirty_rec) * max(0.0, 1.0 - ((sc_val - 0.85) / 0.30)^2));
+        en_cap_v = en_cap + 25.0 * w_gentle;
+        en_pen_v = min(35.0, 3.0 * (max(0.0, en_v - en_cap_v) / max(en_norm, 2.0 * w_gentle))^1.5);
+        obj_v = sen_v + 36.0 * w_rel_v + 12.0 * w_bal_v + 15.0 * w_agg_v - 10.0 * w_pen_v - 4.0 * w_low_v - en_pen_v;
+        eval_hist_scale(end+1, 1)  = str_val;
         eval_hist_sensai(end+1, 1) = sen_v;
         eval_hist_enova(end+1, 1)  = en_v;
         eval_hist_obj(end+1, 1)    = obj_v;
@@ -430,4 +434,16 @@ end
 w = 0.5 * (1 - cos(pi * (0:(fade_len - 1)) / (fade_len - 1)));
 b12 = [b1(:, 1:end-fade_len), bsxfun(@times, b1(:, end-fade_len+1:end), 1 - w) + bsxfun(@times, b2(:, 1:fade_len), w), b2(:, fade_len+1:end)];
 out = [b12(:, 1:end-fade_len), bsxfun(@times, b12(:, end-fade_len+1:end), 1 - w) + bsxfun(@times, b3(:, 1:fade_len), w), b3(:, fade_len+1:end)];
+end
+
+function S_val = local_sc_to_strength(sc)
+log_sc_knots = [-1.0, -log10(3), -log10(2), 0.0, 1.0];
+S_knots      = [10.0,       8.0,       7.0, 6.0, 0.1];
+S_val = interp1(log_sc_knots, S_knots, log10(max(double(sc), 1e-12)), 'linear', 'extrap');
+end
+
+function sc = local_strength_to_sc(S_val)
+log_sc_knots = [-1.0, -log10(3), -log10(2), 0.0, 1.0];
+S_knots      = [10.0,       8.0,       7.0, 6.0, 0.1];
+sc = 10.0 .^ interp1(S_knots, log_sc_knots, double(S_val), 'linear', 'extrap');
 end

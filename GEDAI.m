@@ -114,8 +114,19 @@ if isnumeric(artifact_threshold_type)
     threshold_com_str = num2str(artifact_threshold_type);
     threshold_label = threshold_com_str;
 else
-    threshold_label = char(artifact_threshold_type);
-    threshold_com_str = ['''' threshold_label ''''];
+    raw_threshold_label = char(artifact_threshold_type);
+    threshold_com_str = ['''' raw_threshold_label ''''];
+    if strcmpi(raw_threshold_label, 'auto')
+        threshold_label = 'auto (7.00x)';
+    elseif strcmpi(raw_threshold_label, 'auto+')
+        threshold_label = 'auto+ (8.00x)';
+    elseif strcmpi(raw_threshold_label, 'auto-')
+        threshold_label = 'auto- (6.00x)';
+    elseif strncmpi(raw_threshold_label, 'auto:', 5)
+        threshold_label = sprintf('auto (%.2fx)', str2double(raw_threshold_label(6:end)));
+    else
+        threshold_label = raw_threshold_label;
+    end
 end
 if nargin < 3 || isempty(epoch_size_in_cycles)
     epoch_size_in_cycles = 12;  % Note: Number of wave CYCLES per epoch across wavelet bands (default = 12 cycles)
@@ -729,6 +740,9 @@ else
     broadband_maxThreshold = 12;
 end
 [broadband_artifact_threshold_type, band_artifact_threshold_types, w_rank_subspace, w_macro_subspace, m_eff_eeg_subspace, dip_frac_subspace] = GEDAI_compute_band_z3_scales(EEGavRef.data, EEGavRef.srate, refCOV_broadband, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier, use_cached_subspace);
+if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && strcmpi(char(artifact_threshold_type), 'auto') && strcmpi(signal_type, 'eeg')
+    threshold_label = sprintf('auto (%.2fx)', GEDAI_sc_to_strength(0.50 * (2.0 ^ (w_rank_subspace - w_macro_subspace))));
+end
 [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV_broadband, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
@@ -2221,7 +2235,11 @@ is_auto_mode = strcmpi(char(artifact_threshold_type), 'auto');
 if is_auto_mode
     sc_opt = 0.50 * (2.0 ^ (w_rank - w_macro));
 else
-    sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:"));
+    str_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:"));
+    if isnan(str_opt)
+        return;
+    end
+    sc_opt = GEDAI_strength_to_sc(str_opt);
 end
 if isnan(sc_opt)
     return;
@@ -2249,7 +2267,7 @@ if is_auto_mode
     w_hi_meff    = 0.0;
     w_alpha_gate = w_macro;
     w_dip_3s     = 0.0;
-    bb_threshold_type = sprintf('auto:%.6f', sc_bb_base);
+    bb_threshold_type = sprintf('auto:%.6f', GEDAI_sc_to_strength(sc_bb_base));
 else
     r_sub_g      = (M_d^3) / max(double(N_ch - 1), 1.0);
     w_ch_dof_g   = 1.0 ./ (1.0 + exp(-(r_sub_g - 0.85) / 0.08));
@@ -2262,7 +2280,7 @@ else
         nm_bb    = (nm_bb_0 ^ (1.0 - w_dip_3s)) * (M_d ^ w_dip_3s);
         bb_threshold_type = sprintf('%.6f', 10.0 - nm_bb);
     else
-        bb_threshold_type = sprintf('auto:%.6f', sc_bb_base);
+        bb_threshold_type = sprintf('auto:%.6f', GEDAI_sc_to_strength(sc_bb_base));
     end
 end
 
@@ -2277,7 +2295,19 @@ for f = 1:num_proc
         nm_f   = (nm_f_0 ^ (1.0 - w_dip_3s)) * (M_d ^ w_dip_3s);
         band_threshold_types{f} = sprintf('%.6f', 10.0 - nm_f);
     else
-        band_threshold_types{f} = sprintf('auto:%.6f', sc_band_0);
+        band_threshold_types{f} = sprintf('auto:%.6f', GEDAI_sc_to_strength(sc_band_0));
     end
 end
+end
+
+function S_val = GEDAI_sc_to_strength(sc)
+log_sc_knots = [-1.0, -log10(3), -log10(2), 0.0, 1.0];
+S_knots      = [10.0,       8.0,       7.0, 6.0, 0.1];
+S_val = interp1(log_sc_knots, S_knots, log10(max(double(sc), 1e-12)), 'linear', 'extrap');
+end
+
+function sc = GEDAI_strength_to_sc(S_val)
+log_sc_knots = [-1.0, -log10(3), -log10(2), 0.0, 1.0];
+S_knots      = [10.0,       8.0,       7.0, 6.0, 0.1];
+sc = 10.0 .^ interp1(S_knots, log_sc_knots, double(S_val), 'linear', 'extrap');
 end

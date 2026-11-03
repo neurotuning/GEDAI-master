@@ -117,6 +117,13 @@ if nargin >= 10 && ~isempty(SENSAI_score)
     else
         artifact_threshold_str = artifact_threshold_type;
     end
+    if strcmpi(artifact_threshold_str, 'auto')
+        artifact_threshold_str = 'auto (7.00x)';
+    elseif strcmpi(artifact_threshold_str, 'auto+')
+        artifact_threshold_str = 'auto+ (8.00x)';
+    elseif strcmpi(artifact_threshold_str, 'auto-')
+        artifact_threshold_str = 'auto- (6.00x)';
+    end
     if isempty(smoothing_window_seconds), smoothing_window_seconds = Inf; end
 
     spacer = '              '; % Doubled whitespace separation (2 tabs)
