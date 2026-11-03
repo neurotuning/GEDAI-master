@@ -712,6 +712,15 @@ end
 
 disp([newline 'SENSAI threshold detection...please wait']);
 broadband_optimization_type = 'parabolic';
+if ndims(refCOV) == 3
+    refCOV_broadband = mean(refCOV, 3);
+else
+    refCOV_broadband = refCOV;
+end
+use_cached_subspace = isfield(EEGin, 'etc') && isstruct(EEGin.etc) && isfield(EEGin.etc, 'GEDAI_use_cached_invariants') && logical(EEGin.etc.GEDAI_use_cached_invariants);
+if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && (strcmpi(char(artifact_threshold_type), 'optimize') || strcmpi(char(artifact_threshold_type), 'bayesopt'))
+    GEDAI_compute_band_z3_scales(EEGavRef.data, EEGavRef.srate, refCOV_broadband, 'auto', signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier, false);
+end
 bayesopt_results = []; if (ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) && (strcmpi(char(artifact_threshold_type), 'optimize') || strcmpi(char(artifact_threshold_type), 'bayesopt')), [opt_scale, ~, bayesopt_results, selected_opt_type] = GEDAI_bayesopt_strength(EEGin.data, EEGin.srate, EEGin.chanlocs, refCOV, 12, double(~silent_mode), visualize_artifacts, signal_type, epoch_size_in_cycles, lowcut_frequency, parallelize); artifact_threshold_type = selected_opt_type; threshold_label = sprintf('optimize (%.2fx)', opt_scale); end; broadband_artifact_threshold_type = artifact_threshold_type;
 broadband_minThreshold = -4;
 if strcmpi(signal_type, 'meg')
@@ -719,12 +728,7 @@ if strcmpi(signal_type, 'meg')
 else
     broadband_maxThreshold = 12;
 end
-if ndims(refCOV) == 3
-    refCOV_broadband = mean(refCOV, 3);
-else
-    refCOV_broadband = refCOV;
-end
-[broadband_artifact_threshold_type, band_artifact_threshold_types] = GEDAI_compute_band_z3_scales(EEGavRef.data, EEGavRef.srate, refCOV_broadband, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier);
+[broadband_artifact_threshold_type, band_artifact_threshold_types, w_rank_subspace, w_macro_subspace, m_eff_eeg_subspace, dip_frac_subspace] = GEDAI_compute_band_z3_scales(EEGavRef.data, EEGavRef.srate, refCOV_broadband, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier, use_cached_subspace);
 [cleaned_broadband_data, ~, broadband_sensai, broadband_thresh, broadband_ENOVA] = GEDAI_per_band(double(EEGavRef.data), EEGavRef.srate, EEGavRef.chanlocs, broadband_artifact_threshold_type, broadband_epoch_size, refCOV_broadband, broadband_optimization_type, parallelize, signal_type, broadband_minThreshold, broadband_maxThreshold, smoothing_window_seconds);
 
 
@@ -1374,6 +1378,10 @@ EEGclean.etc.GEDAI.epochs_rejected = num_rejected;
 EEGclean.etc.GEDAI.total_epochs = original_total_epochs;
 EEGclean.etc.GEDAI.percentage_rejected = percentage_rejected;
 EEGclean.etc.GEDAI.refCOV = refCOV;
+EEGclean.etc.GEDAI.w_rank = w_rank_subspace;
+EEGclean.etc.GEDAI.w_macro = w_macro_subspace;
+EEGclean.etc.GEDAI.m_eff_eeg = m_eff_eeg_subspace;
+EEGclean.etc.GEDAI.dip_frac = dip_frac_subspace;
 EEGclean.etc.GEDAI.leadfield_method = resolved_leadfield_method;
 EEGclean.etc.GEDAI.threshold_label = threshold_label; if ~isempty(bayesopt_results), EEGclean.etc.GEDAI.bayesopt_results = bayesopt_results; EEGclean.etc.GEDAI.optimal_auto_scale = bayesopt_results.OptimalAutoScale; end
 if has_flat_recording_ref
@@ -2029,13 +2037,17 @@ K(:, 3:3:end) = dz ./ dist3;
 end
 
 
-function [bb_threshold_type, band_threshold_types] = GEDAI_compute_band_z3_scales(raw_data, srate, refCOV, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier)
-% GEDAI_COMPUTE_BAND_Z3_SCALES - Band-Local Z3 Adaptation for 'optimize' / 'auto:<sc>'.
-% When an aggressive scale sc < 1.0 is selected for EEG, computes each MODWT wavelet
-% band's raw Z3 multiplier m_eff(f) in [m_min, 1.5*M] (where M = SSI_top_PCs = 3,
-% m_min = M/(M-1) = 1.5). Contaminated bands (w_clean = 0, e.g. B1-B3 EMG) receive
-% sc_dirty = sc * sqrt(min(1, m_eff(f)/M)), while clean dipolar bands (w_clean = 1,
-% e.g. B4 Alpha, m_eff(f) >= M) and Broadband Pass 1 relax toward max(sc, 1/M).
+function [bb_threshold_type, band_threshold_types, w_rank, w_macro, m_eff_eeg, dip_frac] = GEDAI_compute_band_z3_scales(raw_data, srate, refCOV, artifact_threshold_type, signal_type, epoch_size_in_cycles, lowcut_frequency, k_channel_multiplier, use_cached_inv)
+% GEDAI_COMPUTE_BAND_Z3_SCALES - Continuous Band-Local Z3 & Subspace Adaptation
+% for 'auto', 'optimize', and 'auto:<sc>'.
+% Maps continuous spectral-spatial GEVD invariants (m_eff(f), PR_slow, c1_eeg,
+% covariance tail decay, and dipolar energy fraction) smoothly to broadband
+% Pass 1 and per-band Pass 2 denoising scales without discrete cutoffs.
+if nargin < 9 || isempty(use_cached_inv), use_cached_inv = false; end
+w_rank    = 0.0;
+w_macro   = 0.0;
+m_eff_eeg = 3.0;
+dip_frac  = 0.5;
 
 [N_ch, N_pnts] = size(raw_data);
 num_wav_bands = max(6, min(ceil(log2(srate / lowcut_frequency)), floor(log2(N_pnts))));
@@ -2056,17 +2068,20 @@ end
 if ~(ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) || (~strncmp(char(artifact_threshold_type), 'auto:', 5) && ~strcmpi(char(artifact_threshold_type), 'auto'))
     return;
 end
-if strcmpi(char(artifact_threshold_type), 'auto'), if N_ch >= 60 && srate >= 200, sc_opt = 1.0; elseif N_ch >= 45 && N_ch < 60 && srate >= 200, sc_opt = 0.25; else, sc_opt = 0.5; end; else, sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:")); end
-if isnan(sc_opt) || sc_opt >= 1.0, if sc_opt >= 1.0, sc_str = sprintf('auto:%.6f', sc_opt); bb_threshold_type = sc_str; band_threshold_types = repmat({sc_str}, 1, max(1, num_proc)); end
-    return;
-end
-
-persistent cached_sig cached_m_eff
+persistent cached_sig cached_m_eff cached_w_rank cached_w_macro cached_meff_eeg cached_dip_frac
 sig_vec = [double(N_ch), double(N_pnts), double(srate), double(num_proc), ...
            double(raw_data(1, 1)), double(raw_data(end, end)), double(sum(raw_data(1, :)))];
 
-if ~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(cached_sig - sig_vec)) <= 1e-9 && numel(cached_m_eff) == num_proc
-    m_eff_vec = cached_m_eff;
+if (~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(cached_sig - sig_vec)) <= 1e-9 && numel(cached_m_eff) == num_proc) || ...
+   (use_cached_inv && ~isempty(cached_m_eff) && cached_sig(1) == double(N_ch) && cached_sig(3) == double(srate))
+    m_eff_vec = cached_m_eff(1:min(num_proc, numel(cached_m_eff)));
+    if numel(m_eff_vec) < num_proc
+        m_eff_vec(end+1:num_proc) = m_eff_vec(end);
+    end
+    w_rank    = cached_w_rank;
+    w_macro   = cached_w_macro;
+    m_eff_eeg = cached_meff_eeg;
+    dip_frac  = cached_dip_frac;
 else
     act_level = num_wav_bands - 1;
     min_ep_s  = min(ceil(k_channel_multiplier * N_ch), N_pnts);
@@ -2088,10 +2103,32 @@ else
     refCOV_reg = (refCOV_reg + refCOV_reg') / 2;
     [Vs, Ds] = eig(refCOV_reg);
     [~, sidx] = sort(diag(Ds), 'descend');
-    evecs_T = Vs(:, sidx(1:round(M_d)));
+    evecs_T    = Vs(:, sidx(1:round(M_d)));
+    evecs_lead = Vs(:, sidx(1:min(round(M_d)^2, max(1, N_ch - 1))));
 
-    raw_T = double(raw_data)';
+    C_glob = cov(double(raw_data)');
+    C_glob = (C_glob + C_glob') / 2;
+    [Vg, Dg] = eig(C_glob);
+    [ev_g, ord_g] = sort(abs(diag(Dg)), 'descend');
+    Vg = Vg(:, ord_g);
+    idx_mid      = max(2, round(0.20 * N_ch)):max(3, round(0.35 * N_ch));
+    idx_tail80   = max(2, round(0.80 * N_ch)):max(2, N_ch - 1);
+    idx_tail85   = max(2, round(0.85 * N_ch)):max(2, N_ch - 1);
+    log_tail     = log10(max(median(ev_g(idx_tail80)) / max(median(ev_g(1:round(M_d))), 1e-15), 1e-15));
+    log_mid_tail = log10(max(median(ev_g(idx_tail85)) / max(median(ev_g(idx_mid)), 1e-15), 1e-15));
+    head_mid     = log10(max(median(ev_g(1:min(2, N_ch))) / max(median(ev_g(idx_mid)), 1e-15), 1e-15));
+    dip_frac     = trace(evecs_lead' * C_glob * evecs_lead) / max(trace(C_glob), 1e-15);
+    idx_vmid     = min(N_ch, 3):max(min(N_ch, 3), min(N_ch - 1, round(0.40 * N_ch)));
+    V_mid        = Vg(:, idx_vmid);
+    C_mid        = V_mid * diag(ev_g(idx_vmid)) * V_mid';
+    dip_mid      = trace(evecs_lead' * C_mid * evecs_lead) / max(trace(C_mid), 1e-15);
+    dip_eff      = 0.5 * (dip_frac + dip_mid);
+
+    raw_T     = double(raw_data)';
     m_eff_vec = repmat(M_d, 1, num_proc);
+    PRm_vec   = repmat(M_d, 1, num_proc);
+    c1m_vec   = repmat(c1_fl, 1, num_proc);
+    burst_vec = ones(1, num_proc);
     for f = 1:num_proc
         wb_raw = stateful_modwt_single_band(raw_T, 'haar', act_level, f)';
         ep_s = max(2, round(ep_sizes(f) * srate));
@@ -2119,13 +2156,13 @@ else
             c1v(e) = norm(evecs_T' * (pt / max(norm(pt), 1e-12)));
         end
         pk = all_ev(end, :);
+        burst_vec(f) = prctile(pk, 90) / max(median(pk), 1e-12);
         tmask = (pk >= median(pk));
         if ~any(tmask), tmask = true(1, N_ep); end
-        if N_ch <= round(M_d)^3
-            n_dof = min(round(M_d)^3, floor(ep_s / (M_d + 1.0)));
-        else
-            n_dof = round(M_d)^3;
-        end
+        w_ch_dof = 1.0 ./ (1.0 + exp((double(N_ch) - (M_d^3 + 9.0)) / 4.0));
+        w_ep_dof = 1.0 ./ (1.0 + exp((ep_s / max(double(N_ch), 1.0) - (M_d + 1.5)) / 0.5));
+        w_dof    = w_ch_dof * w_ep_dof;
+        n_dof    = max(1, round(w_dof * min(round(M_d)^3, floor(ep_s / (M_d + 1.0))) + (1.0 - w_dof) * (round(M_d)^3)));
         k_start = max(2, N_ch - n_dof + 1);
         act = all_ev(k_start:end, tmask);
         ev_fl = 1e-6 * median(pk(tmask));
@@ -2137,40 +2174,78 @@ else
         end
         PRm = mean(pr(tmask));
         c1m = max(0.15, min(0.95, mean(c1v(tmask))));
-        if (N_ch <= round(M_d)^3) && (ep_s <= (M_d + 1.0) * N_ch)
-            w_nd = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)) * min(1.0, M_d / PRm));
-            iqr_ref = M_d - w_nd;
-            ex_iqr  = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
-            iso_boost = max(1.0, (PRm / M_d)^2);
-            m_raw   = (M_d * PRm * iso_boost) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
-            m_floor = max(m_min, (M_d - (M_d - m_min) * w_nd) / (ex_iqr^3));
-            m_eff_vec(f) = max(m_floor, min(M_d^2, m_raw));
-        else
-            w_nd = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)));
-            iqr_ref = M_d - w_nd;
-            ex_iqr  = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
-            m_raw   = (M_d * PRm) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
-            m_floor = max(m_min, M_d / (ex_iqr^3));
-            m_eff_vec(f) = max(m_floor, min(1.5 * M_d, m_raw));
-        end
+        PRm_vec(f) = PRm;
+        c1m_vec(f) = c1m;
+        w_nd      = min(1.0, max(0.0, (c1_fl - c1m) / (1.0 - c1_fl)) * ((min(1.0, M_d / max(PRm, 1e-12))) ^ w_dof));
+        iqr_ref   = M_d - w_nd;
+        ex_iqr    = 1.0 + max(0.0, iqr_l - iqr_ref) / max(M_d - 1.0, 1.0);
+        iso_boost = 1.0 + w_dof * max(0.0, (PRm / M_d)^2 - 1.0);
+        m_raw     = (M_d * PRm * iso_boost) / ((iqr_l^2) * max(c1m, c1_fl) * (ex_iqr^2));
+        m_floor   = max(m_min, (M_d - w_dof * (M_d - m_min) * w_nd) / (ex_iqr^3));
+        m_ceil    = (1.5 * M_d) * ((M_d / 1.5) ^ w_dof);
+        m_eff_vec(f) = max(m_floor, min(m_ceil, m_raw));
     end
-    cached_sig   = sig_vec;
-    cached_m_eff = m_eff_vec;
+    f_c_vec    = sqrt(low_freqs(1:num_proc) .* up_freqs(1:num_proc));
+    w_eeg_vec  = exp(-0.5 * (log2(f_c_vec / 10.0) / 1.50).^2);
+    w_slow_vec = exp(-0.5 * (log2(f_c_vec / 6.0) / 1.00).^2);
+    c1_eeg     = sum(w_eeg_vec .* c1m_vec) / max(sum(w_eeg_vec), 1e-12);
+    PR_slow    = sum(w_slow_vec .* PRm_vec) / max(sum(w_slow_vec), 1e-12);
+    m_eff_eeg  = sum(w_eeg_vec .* m_eff_vec) / max(sum(w_eeg_vec), 1e-12);
+    pk_burst   = sum(w_eeg_vec .* burst_vec) / max(sum(w_eeg_vec), 1e-12);
+    log_burst  = log10(max(pk_burst, 1.0));
+
+    w_dip_mid  = 1.0 ./ (1.0 + exp(-(max(dip_mid, dip_eff) - 0.72) / 0.020));
+    w_head     = 1.0 ./ (1.0 + exp(-(head_mid - 2.15) / 0.10));
+    w_pr_slow  = 1.0 ./ (1.0 + exp((PR_slow - 2.25) / 0.18));
+    w_burst    = 1.0 ./ (1.0 + exp(-(log_burst - 1.25) / 0.15));
+    w_macro    = (1.0 - w_dip_mid) * w_head * w_pr_slow * w_burst;
+
+    w_tail     = 1.0 ./ (1.0 + exp((log_tail + 3.85) / 0.10));
+    w_mid_tail = 1.0 ./ (1.0 + exp((log_mid_tail + 1.85) / 0.08));
+    w_dip      = 1.0 ./ (1.0 + exp(-(dip_eff - 0.55) / 0.020));
+    w_rank     = w_tail * w_mid_tail * w_dip * (1.0 - w_macro);
+
+    cached_sig      = sig_vec;
+    cached_m_eff    = m_eff_vec;
+    cached_w_rank   = w_rank;
+    cached_w_macro  = w_macro;
+    cached_meff_eeg = m_eff_eeg;
+    cached_dip_frac = dip_frac;
+end
+
+if strcmpi(char(artifact_threshold_type), 'auto')
+    sc_opt = 0.50 * (2.0 ^ (w_rank - w_macro));
+else
+    sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:"));
+end
+if isnan(sc_opt)
+    return;
 end
 
 M_d   = double(min(3, N_ch));
 m_min = M_d / max(M_d - 1.0, 1.0);
-if sc_opt > 0.35, sc_clean = max(2.0 * sc_opt, 1.0); else, sc_clean = max(0.22, (2.0 * sc_opt)^1.5); end
+s_hi          = 1.0 ./ (1.0 + exp(-(sc_opt - 0.35) / 0.025));
+sc_lo_c       = max(0.22, (2.0 * sc_opt)^1.5);
+sc_hi_c       = max(sc_opt, 1.0);
+sc_clean      = (sc_lo_c ^ (1.0 - s_hi)) * (sc_hi_c ^ s_hi);
+sc_alpha_ceil = max(sc_opt, 1.0);
+p_dirty       = max(0.0, min(1.0, (1.0 - sc_opt) / 0.50));
 
+f_c_vec     = sqrt(low_freqs(1:num_proc) .* up_freqs(1:num_proc));
+w_eeg_band  = exp(-0.5 * (log2(f_c_vec / 12.0) / 1.60).^2);
 w_clean_vec = min(1.0, max(0.0, (m_eff_vec - m_min) ./ max(M_d - m_min, 1e-12)));
-if sc_opt > 0.35, w_bb_clean = max(w_clean_vec(1:min(5, num_proc))); else, w_bb_clean = mean(w_clean_vec(1:min(5, num_proc))); end
-sc_bb       = sc_opt * ((sc_clean / sc_opt) ^ w_bb_clean);
+w_mean_eeg  = sum(w_eeg_band .* w_clean_vec) / max(sum(w_eeg_band), 1e-12);
+w_max_eeg   = max(w_clean_vec .* (w_eeg_band > 0.15));
+w_bb_clean  = s_hi * w_max_eeg + (1.0 - s_hi) * w_mean_eeg;
+sc_bb       = sc_opt * ((sc_clean / max(sc_opt, 1e-12)) ^ w_bb_clean);
 bb_threshold_type = sprintf('auto:%.6f', sc_bb);
 
 for f = 1:num_proc
-    w_c = w_clean_vec(f);
-    sc_dirty = sc_opt * sqrt(min(1.0, m_eff_vec(f) / M_d));
-    if (low_freqs(f) >= 5.5 && low_freqs(f) <= 10.0), sc_clean_f = max(2.0 * sc_opt, 1.0); else, sc_clean_f = sc_clean; end; sc_band = (sc_dirty ^ (1.0 - w_c)) * (sc_clean_f ^ w_c);
+    w_c        = w_clean_vec(f);
+    sc_dirty   = sc_opt * (min(1.0, m_eff_vec(f) / M_d) ^ (0.5 * p_dirty));
+    w_alpha    = w_macro * exp(-0.5 * (log2(f_c_vec(f) / 9.0) / 0.45)^2);
+    sc_clean_f = (sc_clean ^ (1.0 - w_alpha)) * (sc_alpha_ceil ^ w_alpha);
+    sc_band    = (sc_dirty ^ (1.0 - w_c)) * (sc_clean_f ^ w_c);
     band_threshold_types{f} = sprintf('auto:%.6f', sc_band);
 end
 end

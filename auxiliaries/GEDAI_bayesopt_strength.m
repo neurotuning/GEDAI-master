@@ -63,7 +63,7 @@ EEG_eval.pnts = size(data_sub, 2);
 EEG_eval.trials = 1;
 EEG_eval.xmin = 0;
 EEG_eval.xmax = (EEG_eval.pnts - 1) / srate;
-EEG_eval.etc = struct();
+EEG_eval.etc = struct('GEDAI_use_cached_invariants', true);
 
 if verbose
     fprintf('\n=== GEDAI: Bayesian Optimization (bayesopt) of Denoising Strength ===\n');
@@ -78,7 +78,9 @@ clean_up = onCleanup(@() warning(warn_state));
 outer_noise_multiplier = [];
 [sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
 en_margin_clean = 0.05 + 2.0 * w_rank_rec;
-en_cap = max(55.0 * w_dirty_rec, en_auto + en_margin_clean * (1.0 - w_dirty_rec) + 6.0 * w_dirty_rec);
+en_cap_clean    = en_auto + en_margin_clean;
+en_cap_dirty    = max(55.0, en_auto + 6.0);
+en_cap          = (1.0 - w_dirty_rec) * en_cap_clean + w_dirty_rec * en_cap_dirty;
 
 eval_hist_scale  = 0.5;
 eval_hist_sensai = sensai_auto;
@@ -210,16 +212,24 @@ try
         if strcmpi(signal_type, 'meg')
             outer_noise_mult = 3.0;
         else
-            raw_z3 = compute_outer_z3_noise_multiplier(X_in_hp, EEG_in.srate, refCOV_used, signal_type);
-            w_rank = double(EEG_in.nbchan >= 60 && EEG_in.srate >= 200);
-            if ~w_rank && (enova_pct > 75.0 || (EEG_in.nbchan >= 45 && EEG_in.nbchan < 60 && enova_pct > 20.0))
-                w_dirty = 1.0;
+            [raw_z3, w_rank_z3, w_macro_z3, dip_frac_z3] = compute_outer_z3_noise_multiplier(X_in_hp, EEG_in.srate, refCOV_used, signal_type);
+            if isfield(EEG_clean.etc.GEDAI, 'w_rank') && isfield(EEG_clean.etc.GEDAI, 'w_macro')
+                w_rank  = EEG_clean.etc.GEDAI.w_rank;
+                w_macro = EEG_clean.etc.GEDAI.w_macro;
             else
-                w_z3 = min(1.0, max(0.0, (3.6 - raw_z3) / 1.0));
-                w_en = min(1.0, max(0.0, (enova_pct - 65.0) / 15.0));
-                w_dirty = (1.0 - w_rank) * w_z3 * w_en;
+                w_rank  = w_rank_z3;
+                w_macro = w_macro_z3;
             end
-            outer_noise_mult = max(0.25, 1.40 - 0.55 * w_dirty - 1.10 * w_rank) * raw_z3;
+            if isfield(EEG_clean.etc.GEDAI, 'dip_frac')
+                dip_frac_z3 = EEG_clean.etc.GEDAI.dip_frac;
+            end
+            w_dip_eog = 1.0 ./ (1.0 + exp(-(dip_frac_z3 - 0.85) / 0.020));
+            w_z3      = min(1.0, max(0.0, (3.6 - raw_z3) / 1.0));
+            w_en      = min(1.0, max(0.0, (enova_pct - 65.0) / 15.0));
+            w_en_hi   = 1.0 ./ (1.0 + exp(-(enova_pct - 75.0) / 1.5));
+            w_en_20   = 1.0 ./ (1.0 + exp(-(enova_pct - 20.0) / 2.0));
+            w_dirty   = (1.0 - w_rank) * max(w_macro * w_en_20, w_dip_eog * max(w_en_hi, w_z3 * w_en));
+            outer_noise_mult = max(0.25, 1.40 - 0.50 * w_dirty - 1.15 * w_rank) * raw_z3;
         end
     end
     [sensai_score, ~, ~, ~] = SENSAI_basic(X_cl, X_ar, EEG_in.srate, 1, refCOV_used, outer_noise_mult, signal_type);
@@ -234,7 +244,10 @@ catch
 end
 end
 
-function m_eff = compute_outer_z3_noise_multiplier(eeg_data, srate, refCOV, signal_type)
+function [m_eff, w_rank, w_macro, dip_frac] = compute_outer_z3_noise_multiplier(eeg_data, srate, refCOV, signal_type)
+w_rank   = 0.0;
+w_macro  = 0.0;
+dip_frac = 0.5;
 if ndims(refCOV) == 3
     refCOV = mean(refCOV, 3);
 end
@@ -250,6 +263,25 @@ SSI_top_PCs = min(3, N_chans);
 [Vs, Ds] = eig(refCOV_reg);
 [~, sidx] = sort(diag(Ds), 'descend');
 evecs_Template_cov = Vs(:, sidx(1:SSI_top_PCs));
+evecs_lead         = Vs(:, sidx(1:min(SSI_top_PCs^2, max(1, N_chans - 1))));
+
+C_glob = cov(double(eeg_data)');
+C_glob = (C_glob + C_glob') / 2;
+[Vg, Dg] = eig(C_glob);
+[ev_g, ord_g] = sort(abs(diag(Dg)), 'descend');
+Vg = Vg(:, ord_g);
+idx_mid      = max(2, round(0.20 * N_chans)):max(3, round(0.35 * N_chans));
+idx_tail80   = max(2, round(0.80 * N_chans)):max(2, N_chans - 1);
+idx_tail85   = max(2, round(0.85 * N_chans)):max(2, N_chans - 1);
+log_tail     = log10(max(median(ev_g(idx_tail80)) / max(median(ev_g(1:SSI_top_PCs)), 1e-15), 1e-15));
+log_mid_tail = log10(max(median(ev_g(idx_tail85)) / max(median(ev_g(idx_mid)), 1e-15), 1e-15));
+head_mid     = log10(max(median(ev_g(1:min(2, N_chans))) / max(median(ev_g(idx_mid)), 1e-15), 1e-15));
+dip_frac     = trace(evecs_lead' * C_glob * evecs_lead) / max(trace(C_glob), 1e-15);
+idx_vmid     = min(N_chans, 3):max(min(N_chans, 3), min(N_chans - 1, round(0.40 * N_chans)));
+V_mid        = Vg(:, idx_vmid);
+C_mid        = V_mid * diag(ev_g(idx_vmid)) * V_mid';
+dip_mid      = trace(evecs_lead' * C_mid * evecs_lead) / max(trace(C_mid), 1e-15);
+dip_eff      = 0.5 * (dip_frac + dip_mid);
 
 epoch_samples = max(2, round(srate * 1.0));
 n_epochs = floor(size(eeg_data, 2) / epoch_samples);
@@ -269,14 +301,55 @@ for epo = 1:n_epochs
     end
     [Evec_sub(:, :, epo), Eval_sub(:, :, epo)] = eig(C_ep, refCOV_reg, 'chol');
 end
-m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, -4);
+[m_eff, c1_bb] = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, -4);
+
+% Slow-band (2-12 Hz) GEVD participation ratio and dipolar cosine alignment
+eeg_slow = movmean(double(eeg_data), max(1, round(srate / 12)), 2) - movmean(double(eeg_data), max(1, round(srate / 2)), 2);
+X_ep_s   = reshape(eeg_slow(:, 1:(n_epochs * epoch_samples)), N_chans, epoch_samples, n_epochs);
+pr_s = zeros(1, n_epochs);
+c1_s = zeros(1, n_epochs);
+pk_s = zeros(1, n_epochs);
+for epo = 1:n_epochs
+    C_s = cov(X_ep_s(:, :, epo)');
+    C_s = (C_s + C_s') / 2;
+    c_tr = trace(C_s) / N_chans;
+    if c_tr > 0
+        C_s = (1 - 1e-9) * C_s + (1e-9 * c_tr) * refCOV_reg;
+    end
+    [Ec_s, Ev_s] = eig(C_s, refCOV_reg, 'chol');
+    ev_r = abs(double(diag(Ev_s)));
+    [ev_s, ord_s] = sort(ev_r, 'ascend');
+    pk_s(epo) = ev_s(end);
+    ev_a = ev_s(2:end);
+    pr_s(epo) = (sum(ev_a)^2) / max(sum(ev_a.^2), 1e-12);
+    vt_s = double(Ec_s(:, ord_s(end)));
+    pt_s = refCOV_reg * vt_s;
+    c1_s(epo) = norm(evecs_Template_cov' * (pt_s / max(norm(pt_s), 1e-12)));
+end
+tmask_s = (pk_s >= median(pk_s));
+if ~any(tmask_s), tmask_s = true(1, n_epochs); end
+PR_slow = mean(pr_s(tmask_s));
+c1_eeg  = 0.5 * c1_bb + 0.5 * max(0.15, min(0.95, mean(c1_s(tmask_s))));
+
+w_dip_mid  = 1.0 ./ (1.0 + exp(-(max(dip_mid, dip_eff) - 0.72) / 0.020));
+w_head     = 1.0 ./ (1.0 + exp(-(head_mid - 2.15) / 0.10));
+w_pr_slow  = 1.0 ./ (1.0 + exp((PR_slow - 2.25) / 0.18));
+w_c1_low   = 1.0 ./ (1.0 + exp((c1_eeg - 0.52) / 0.04));
+w_macro    = (1.0 - w_dip_mid) * w_head * w_pr_slow * w_c1_low;
+
+w_tail     = 1.0 ./ (1.0 + exp((log_tail + 3.85) / 0.10));
+w_mid_tail = 1.0 ./ (1.0 + exp((log_mid_tail + 1.85) / 0.08));
+w_dip      = 1.0 ./ (1.0 + exp(-(dip_eff - 0.55) / 0.020));
+w_rank     = w_tail * w_mid_tail * w_dip * (1.0 - w_macro);
 end
 
-function m_eff = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold)
+function [m_eff, c1, PR] = local_compute_z3_noise_multiplier(Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold)
 [N_chans, ~, w_len] = size(Eval_sub);
 M = max(1, SSI_top_PCs);
 if N_chans <= 2 || w_len < 1
     m_eff = double(M);
+    c1    = 0.67;
+    PR    = double(M);
     return;
 end
 
