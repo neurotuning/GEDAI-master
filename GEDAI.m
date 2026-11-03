@@ -2072,8 +2072,7 @@ persistent cached_sig cached_m_eff cached_w_rank cached_w_macro cached_meff_eeg 
 sig_vec = [double(N_ch), double(N_pnts), double(srate), double(num_proc), ...
            double(raw_data(1, 1)), double(raw_data(end, end)), double(sum(raw_data(1, :)))];
 
-if (~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(cached_sig - sig_vec)) <= 1e-9 && numel(cached_m_eff) == num_proc) || ...
-   (use_cached_inv && ~isempty(cached_m_eff) && cached_sig(1) == double(N_ch) && cached_sig(3) == double(srate))
+if ~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(cached_sig - sig_vec)) <= 1e-9 && numel(cached_m_eff) == num_proc
     m_eff_vec = cached_m_eff(1:min(num_proc, numel(cached_m_eff)));
     if numel(m_eff_vec) < num_proc
         m_eff_vec(end+1:num_proc) = m_eff_vec(end);
@@ -2159,10 +2158,11 @@ else
         burst_vec(f) = prctile(pk, 90) / max(median(pk), 1e-12);
         tmask = (pk >= median(pk));
         if ~any(tmask), tmask = true(1, N_ep); end
-        w_ch_dof = 1.0 ./ (1.0 + exp((double(N_ch) - (M_d^3 + 9.0)) / 4.0));
-        w_ep_dof = 1.0 ./ (1.0 + exp((ep_s / max(double(N_ch), 1.0) - (M_d + 1.5)) / 0.5));
-        w_dof    = w_ch_dof * w_ep_dof;
-        n_dof    = max(1, round(w_dof * min(round(M_d)^3, floor(ep_s / (M_d + 1.0))) + (1.0 - w_dof) * (round(M_d)^3)));
+        r_sub     = (M_d^3) / max(double(N_ch - 1), 1.0);
+        w_ch_dof  = 1.0 ./ (1.0 + exp(-(r_sub - 0.85) / 0.08));
+        w_ep_dof  = 1.0 ./ (1.0 + exp((ep_s / max(double(N_ch), 1.0) - (M_d + 1.25)) / 0.25));
+        w_dof     = w_ch_dof * w_ep_dof;
+        n_dof     = max(1, round(w_ch_dof * min(round(M_d)^3, floor(ep_s / (M_d + 1.0))) + (1.0 - w_ch_dof) * (round(M_d)^3)));
         k_start = max(2, N_ch - n_dof + 1);
         act = all_ev(k_start:end, tmask);
         ev_fl = 1e-6 * median(pk(tmask));
@@ -2200,6 +2200,10 @@ else
     w_burst    = 1.0 ./ (1.0 + exp(-(log_burst - 1.25) / 0.15));
     w_macro    = (1.0 - w_dip_mid) * w_head * w_pr_slow * w_burst;
 
+    r_sub_g    = (M_d^3) / max(double(N_ch - 1), 1.0);
+    w_ch_dof_g = 1.0 ./ (1.0 + exp(-(r_sub_g - 0.85) / 0.08));
+    w_hi_meff  = (1.0 - w_ch_dof_g) * max(0.0, min(1.0, (m_eff_eeg - (M_d - 0.5)) / max(0.5 * M_d, 1e-12)));
+
     w_tail     = 1.0 ./ (1.0 + exp((log_tail + 3.85) / 0.10));
     w_mid_tail = 1.0 ./ (1.0 + exp((log_mid_tail + 1.85) / 0.08));
     w_dip      = 1.0 ./ (1.0 + exp(-(dip_eff - 0.55) / 0.020));
@@ -2213,7 +2217,8 @@ else
     cached_dip_frac = dip_frac;
 end
 
-if strcmpi(char(artifact_threshold_type), 'auto')
+is_auto_mode = strcmpi(char(artifact_threshold_type), 'auto');
+if is_auto_mode
     sc_opt = 0.50 * (2.0 ^ (w_rank - w_macro));
 else
     sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:"));
@@ -2237,15 +2242,42 @@ w_clean_vec = min(1.0, max(0.0, (m_eff_vec - m_min) ./ max(M_d - m_min, 1e-12)))
 w_mean_eeg  = sum(w_eeg_band .* w_clean_vec) / max(sum(w_eeg_band), 1e-12);
 w_max_eeg   = max(w_clean_vec .* (w_eeg_band > 0.15));
 w_bb_clean  = s_hi * w_max_eeg + (1.0 - s_hi) * w_mean_eeg;
-sc_bb       = sc_opt * ((sc_clean / max(sc_opt, 1e-12)) ^ w_bb_clean);
-bb_threshold_type = sprintf('auto:%.6f', sc_bb);
+sc_bb_base  = sc_opt * ((sc_clean / max(sc_opt, 1e-12)) ^ w_bb_clean);
+
+if is_auto_mode
+    w_bal        = 0.0;
+    w_hi_meff    = 0.0;
+    w_alpha_gate = w_macro;
+    w_dip_3s     = 0.0;
+    bb_threshold_type = sprintf('auto:%.6f', sc_bb_base);
+else
+    r_sub_g      = (M_d^3) / max(double(N_ch - 1), 1.0);
+    w_ch_dof_g   = 1.0 ./ (1.0 + exp(-(r_sub_g - 0.85) / 0.08));
+    w_bal        = (1.0 - w_rank) * exp(-0.5 * ((sc_opt - 0.65) / 0.08)^2);
+    w_hi_meff    = (1.0 - w_ch_dof_g) * max(0.0, min(1.0, (m_eff_eeg - (M_d - 0.5)) / max(0.5 * M_d, 1e-12)));
+    w_alpha_gate = max(w_macro, (1.0 - s_hi) * (1.0 - w_rank));
+    w_dip_3s     = w_bal * w_hi_meff;
+    if w_dip_3s > 1e-6
+        nm_bb_0  = sc_bb_base * max(m_eff_eeg, m_min);
+        nm_bb    = (nm_bb_0 ^ (1.0 - w_dip_3s)) * (M_d ^ w_dip_3s);
+        bb_threshold_type = sprintf('%.6f', 10.0 - nm_bb);
+    else
+        bb_threshold_type = sprintf('auto:%.6f', sc_bb_base);
+    end
+end
 
 for f = 1:num_proc
     w_c        = w_clean_vec(f);
     sc_dirty   = sc_opt * (min(1.0, m_eff_vec(f) / M_d) ^ (0.5 * p_dirty));
-    w_alpha    = w_macro * exp(-0.5 * (log2(f_c_vec(f) / 9.0) / 0.45)^2);
+    w_alpha    = w_alpha_gate * exp(-0.5 * (log2(f_c_vec(f) / 9.0) / 0.45)^2);
     sc_clean_f = (sc_clean ^ (1.0 - w_alpha)) * (sc_alpha_ceil ^ w_alpha);
-    sc_band    = (sc_dirty ^ (1.0 - w_c)) * (sc_clean_f ^ w_c);
-    band_threshold_types{f} = sprintf('auto:%.6f', sc_band);
+    sc_band_0  = (sc_dirty ^ (1.0 - w_c)) * (sc_clean_f ^ w_c);
+    if w_dip_3s > 1e-6
+        nm_f_0 = sc_band_0 * max(m_eff_vec(f), m_min);
+        nm_f   = (nm_f_0 ^ (1.0 - w_dip_3s)) * (M_d ^ w_dip_3s);
+        band_threshold_types{f} = sprintf('%.6f', 10.0 - nm_f);
+    else
+        band_threshold_types{f} = sprintf('auto:%.6f', sc_band_0);
+    end
 end
 end

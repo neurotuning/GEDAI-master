@@ -835,11 +835,12 @@ if ~any(topq_mask)
     topq_mask = true(1, w_len);
 end
 
-if N_chans <= M^3
-    n_dof = min(M^3, floor(epoch_samples / (M + 1)));
-else
-    n_dof = M^3;
-end
+M_d = double(M);
+m_min = M_d / max(M_d - 1.0, 1.0);
+r_sub     = (M_d^3) / max(double(N_chans - 1), 1.0);
+w_ch_dof  = 1.0 ./ (1.0 + exp(-(r_sub - 0.85) / 0.08));
+w_ep_dof  = 1.0 ./ (1.0 + exp((epoch_samples / max(double(N_chans), 1.0) - (M_d + 1.25)) / 0.25));
+w_dof     = w_ch_dof * w_ep_dof; n_dof = max(1, round(w_ch_dof * min(round(M_d)^3, floor(epoch_samples / (M_d + 1.0))) + (1.0 - w_ch_dof) * (round(M_d)^3)));
 k_start = max(2, N_chans - n_dof + 1);
 active_evals = all_evals_mat(k_start:end, topq_mask);
 ev_floor = 1e-6 * median(peak_ev(topq_mask));
@@ -852,8 +853,6 @@ end
 
 PR = mean(part_ratios(topq_mask));
 c1 = max(0.15, min(0.95, mean(top1_cos(topq_mask))));
-M_d = double(M);
-m_min = M_d / max(M_d - 1.0, 1.0);
 
 if minThreshold == -4
     scale_factor = double(N_chans) / (M_d^2);
@@ -863,21 +862,13 @@ if minThreshold == -4
     m_eff = max(m_floor, min(1.5 * M_d, m_raw));
 else
     c1_floor = (M_d - 1.0) / M_d;
-    if (N_chans <= M^3) && (epoch_samples <= (M_d + 1.0) * N_chans)
-        w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)) * min(1.0, M_d / PR));
-        iqr_ref = M_d - w_nondip;
-        excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
-        iso_boost = max(1.0, (PR / M_d)^2);
-        m_raw = (M_d * PR * iso_boost) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
-        m_floor = max(m_min, (M_d - (M_d - m_min) * w_nondip) / (excess_iqr^3));
-        m_eff = max(m_floor, min(M_d^2, m_raw));
-    else
-        w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)));
-        iqr_ref = M_d - w_nondip;
-        excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / (M_d - 1.0);
-        m_raw = (M_d * PR) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
-        m_floor = max(m_min, M_d / (excess_iqr^3));
-        m_eff = max(m_floor, min(1.5 * M_d, m_raw));
-    end
+    w_nondip = min(1.0, max(0.0, (c1_floor - c1) / (1.0 - c1_floor)) * ((min(1.0, M_d / max(PR, 1e-12))) ^ w_dof));
+    iqr_ref = M_d - w_nondip;
+    excess_iqr = 1.0 + max(0.0, iqr_log - iqr_ref) / max(M_d - 1.0, 1.0);
+    iso_boost = 1.0 + w_dof * max(0.0, (PR / M_d)^2 - 1.0);
+    m_raw = (M_d * PR * iso_boost) / ((iqr_log^2) * max(c1, c1_floor) * (excess_iqr^2));
+    m_floor = max(m_min, (M_d - w_dof * (M_d - m_min) * w_nondip) / (excess_iqr^3));
+    m_ceil = (1.5 * M_d) * ((M_d / 1.5) ^ w_dof);
+    m_eff = max(m_floor, min(m_ceil, m_raw));
 end
 end

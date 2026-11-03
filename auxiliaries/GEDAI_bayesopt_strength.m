@@ -76,10 +76,10 @@ clean_up = onCleanup(@() warning(warn_state));
 
 % Step 0: Evaluate 'auto' (0.50x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
 outer_noise_multiplier = [];
-[sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
+[sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec, w_hi_meff_rec] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
 en_margin_clean = 0.05 + 2.0 * w_rank_rec;
 en_cap_clean    = en_auto + en_margin_clean;
-en_cap_dirty    = max(55.0, en_auto + 6.0);
+en_cap_dirty    = max(55.0, en_auto + 12.0);
 en_cap          = (1.0 - w_dirty_rec) * en_cap_clean + w_dirty_rec * en_cap_dirty;
 
 eval_hist_scale  = 0.5;
@@ -186,7 +186,12 @@ end
         end
         [sen_v, en_v] = eval_autoscale_metrics(sc_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
         en_norm = max(0.10, en_margin_clean * (1.0 - w_dirty_rec) + w_dirty_rec);
-        obj_v = sen_v + 36.0 * w_rank_rec * max(0, min(sc_val, 1.0) - 0.5) - 3.0 * (max(0, en_v - en_cap) / en_norm)^1.5;
+        w_bal_v = (1.0 - w_rank_rec) * (1.0 - w_dirty_rec) * w_hi_meff_rec * exp(-0.5 * ((sc_val - 0.65) / 0.08)^2);
+        w_rel_v = ((1.0 - w_dirty_rec)^2) * max(w_rank_rec, 0.35 * (1.0 - w_hi_meff_rec)) * max(0, min(sc_val, 1.0) - 0.5);
+        w_agg_v = w_dirty_rec * max(0.0, 0.50 - sc_val) / 0.30;
+        w_pen_v = (1.0 - w_dirty_rec) * max(0.0, 0.50 - sc_val) / 0.10;
+        en_cap_v = en_cap + 25.0 * w_bal_v;
+        obj_v = sen_v + 36.0 * w_rel_v + 12.0 * w_bal_v + 15.0 * w_agg_v - 10.0 * w_pen_v - 3.0 * (max(0, en_v - en_cap_v) / max(en_norm, 2.0 * w_bal_v))^1.5;
         eval_hist_scale(end+1, 1)  = sc_val;
         eval_hist_sensai(end+1, 1) = sen_v;
         eval_hist_enova(end+1, 1)  = en_v;
@@ -196,9 +201,10 @@ end
 
 end
 
-function [sensai_score, enova_pct, outer_noise_mult, w_dirty, w_rank] = eval_autoscale_metrics(sc_val, EEG_in, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_mult)
-w_dirty = 0.0;
-w_rank  = 0.0;
+function [sensai_score, enova_pct, outer_noise_mult, w_dirty, w_rank, w_hi_meff] = eval_autoscale_metrics(sc_val, EEG_in, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_mult)
+w_dirty   = 0.0;
+w_rank    = 0.0;
+w_hi_meff = 0.0;
 try
     mode_str = sprintf('auto:%.6f', sc_val);
     [~, EEG_clean, EEG_art] = evalc( ...
@@ -223,13 +229,21 @@ try
             if isfield(EEG_clean.etc.GEDAI, 'dip_frac')
                 dip_frac_z3 = EEG_clean.etc.GEDAI.dip_frac;
             end
-            w_dip_eog = 1.0 ./ (1.0 + exp(-(dip_frac_z3 - 0.85) / 0.020));
-            w_z3      = min(1.0, max(0.0, (3.6 - raw_z3) / 1.0));
-            w_en      = min(1.0, max(0.0, (enova_pct - 65.0) / 15.0));
-            w_en_hi   = 1.0 ./ (1.0 + exp(-(enova_pct - 75.0) / 1.5));
-            w_en_20   = 1.0 ./ (1.0 + exp(-(enova_pct - 20.0) / 2.0));
-            w_dirty   = (1.0 - w_rank) * max(w_macro * w_en_20, w_dip_eog * max(w_en_hi, w_z3 * w_en));
-            outer_noise_mult = max(0.25, 1.40 - 0.50 * w_dirty - 1.15 * w_rank) * raw_z3;
+            meff_eeg_rec = raw_z3;
+            if isfield(EEG_clean.etc.GEDAI, 'm_eff_eeg')
+                meff_eeg_rec = EEG_clean.etc.GEDAI.m_eff_eeg;
+            end
+            M_d_rec    = double(min(3, EEG_in.nbchan));
+            r_sub_rec  = (M_d_rec^3) / max(double(EEG_in.nbchan - 1), 1.0);
+            w_ch_dof   = 1.0 ./ (1.0 + exp(-(r_sub_rec - 0.85) / 0.08));
+            w_ch_dof_g = 1.0 ./ (1.0 + exp(-(r_sub_rec - 1.25) / 0.08));
+            w_hi_meff  = (1.0 - w_ch_dof) * max(0.0, min(1.0, (meff_eeg_rec - (M_d_rec - 0.5)) / max(0.5 * M_d_rec, 1e-12)));
+            w_dip_eog  = 1.0 ./ (1.0 + exp(-(dip_frac_z3 - 0.65) / 0.030));
+            w_z3_low   = 1.0 ./ (1.0 + exp((raw_z3 - 3.35) / 0.25));
+            w_en_50    = 1.0 ./ (1.0 + exp(-(enova_pct - 50.0) / 5.0));
+            w_en_20    = 1.0 ./ (1.0 + exp(-(enova_pct - 20.0) / 2.0));
+            w_dirty    = (1.0 - w_rank) * max(w_macro * w_en_20, w_dip_eog * max(w_z3_low, w_ch_dof) * (1.0 - w_ch_dof_g) * w_en_50);
+            outer_noise_mult = max(0.15, 1.40 - 1.15 * max(w_dirty, w_rank) - 0.25 * w_hi_meff * (1.0 - w_dirty) * (1.0 - w_rank)) * raw_z3;
         end
     end
     [sensai_score, ~, ~, ~] = SENSAI_basic(X_cl, X_ar, EEG_in.srate, 1, refCOV_used, outer_noise_mult, signal_type);
