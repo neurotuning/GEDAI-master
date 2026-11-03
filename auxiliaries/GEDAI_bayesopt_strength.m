@@ -77,7 +77,7 @@ clean_up = onCleanup(@() warning(warn_state));
 % Step 0: Evaluate 'auto' (7.00x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
 outer_noise_multiplier = [];
 [sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec, w_hi_meff_rec] = eval_autoscale_metrics(7.0, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
-en_margin_clean = 0.05 + 2.0 * w_rank_rec;
+en_margin_clean = 8.00 + 2.0 * w_rank_rec;
 en_cap_clean    = en_auto + en_margin_clean;
 en_cap_dirty    = max(55.0, en_auto + 12.0);
 en_cap          = (1.0 - w_dirty_rec) * en_cap_clean + w_dirty_rec * en_cap_dirty;
@@ -194,8 +194,8 @@ end
         w_low_v  = max(0.0, 6.00 - str_val);
         w_gentle = max(w_bal_v, (1.0 - w_dirty_rec) * max(0.0, 1.0 - ((sc_val - 0.85) / 0.30)^2));
         en_cap_v = en_cap + 25.0 * w_gentle;
-        en_pen_v = min(35.0, 3.0 * (max(0.0, en_v - en_cap_v) / max(en_norm, 2.0 * w_gentle))^1.5);
-        obj_v = sen_v + 36.0 * w_rel_v + 12.0 * w_bal_v + 15.0 * w_agg_v - 10.0 * w_pen_v - 4.0 * w_low_v - en_pen_v;
+        en_pen_v = min(35.0, 1.0 * (max(0.0, en_v - en_cap_v) / max(en_norm, 2.0 * w_gentle))^1.5);
+        obj_v = sen_v + 36.0 * w_rel_v + 6.0 * w_bal_v + 15.0 * w_agg_v - 1.5 * w_pen_v - 4.0 * w_low_v - en_pen_v;
         eval_hist_scale(end+1, 1)  = str_val;
         eval_hist_sensai(end+1, 1) = sen_v;
         eval_hist_enova(end+1, 1)  = en_v;
@@ -247,7 +247,7 @@ try
             w_en_50    = 1.0 ./ (1.0 + exp(-(enova_pct - 50.0) / 5.0));
             w_en_20    = 1.0 ./ (1.0 + exp(-(enova_pct - 20.0) / 2.0));
             w_dirty    = (1.0 - w_rank) * max(w_macro * w_en_20, w_dip_eog * max(w_z3_low, w_ch_dof) * (1.0 - w_ch_dof_g) * w_en_50);
-            outer_noise_mult = max(0.15, 1.40 - 1.15 * max(w_dirty, w_rank) - 0.25 * w_hi_meff * (1.0 - w_dirty) * (1.0 - w_rank)) * raw_z3;
+            outer_noise_mult = max(0.15, 0.85 - 0.60 * max(w_dirty, w_rank) - 0.15 * w_hi_meff * (1.0 - w_dirty) * (1.0 - w_rank)) * raw_z3;
         end
     end
     [sensai_score, ~, ~, ~] = SENSAI_basic(X_cl, X_ar, EEG_in.srate, 1, refCOV_used, outer_noise_mult, signal_type);
