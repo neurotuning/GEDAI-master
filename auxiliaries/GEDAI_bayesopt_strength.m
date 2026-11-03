@@ -133,7 +133,7 @@ else
     best_scale  = 0.5;
     best_SENSAI = sensai_auto;
     best_ENOVA  = en_auto;
-    selected_threshold_type = 'auto';
+    selected_threshold_type = 'auto:0.500000';
 end
 
 opt_results = struct();
@@ -198,11 +198,7 @@ function [sensai_score, enova_pct, outer_noise_mult, w_dirty, w_rank] = eval_aut
 w_dirty = 0.0;
 w_rank  = 0.0;
 try
-    if abs(sc_val - 0.5) < 1e-4
-        mode_str = 'auto';
-    else
-        mode_str = sprintf('auto:%.6f', sc_val);
-    end
+    mode_str = sprintf('auto:%.6f', sc_val);
     [~, EEG_clean, EEG_art] = evalc( ...
         'GEDAI(EEG_in, mode_str, epoch_size_in_cycles, lowcut_frequency, ref_matrix, parallelize, false, inf, inf, signal_type, inf, ''AvgRef'', struct(''silent'', true));');
     X_cl = double(EEG_clean.data);

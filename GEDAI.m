@@ -2056,8 +2056,8 @@ end
 if ~(ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) || (~strncmp(char(artifact_threshold_type), 'auto:', 5) && ~strcmpi(char(artifact_threshold_type), 'auto'))
     return;
 end
-if strcmpi(char(artifact_threshold_type), 'auto'), sc_opt = 0.5; else, sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:")); end
-if isnan(sc_opt) || sc_opt >= 1.0
+if strcmpi(char(artifact_threshold_type), 'auto'), if N_ch >= 60 && srate >= 200, sc_opt = 1.0; elseif N_ch >= 45 && N_ch < 60 && srate >= 200, sc_opt = 0.25; else, sc_opt = 0.5; end; else, sc_opt = str2double(extractAfter(string(artifact_threshold_type), "auto:")); end
+if isnan(sc_opt) || sc_opt >= 1.0, if sc_opt >= 1.0, sc_str = sprintf('auto:%.6f', sc_opt); bb_threshold_type = sc_str; band_threshold_types = repmat({sc_str}, 1, max(1, num_proc)); end
     return;
 end
 
@@ -2160,17 +2160,17 @@ end
 
 M_d   = double(min(3, N_ch));
 m_min = M_d / max(M_d - 1.0, 1.0);
-if strcmpi(char(artifact_threshold_type), 'auto') || sc_opt > 0.35, sc_clean = max(2.0 * sc_opt, 1.0); else, sc_clean = max(0.22, (2.0 * sc_opt)^1.5); end
+if sc_opt > 0.35, sc_clean = max(2.0 * sc_opt, 1.0); else, sc_clean = max(0.22, (2.0 * sc_opt)^1.5); end
 
 w_clean_vec = min(1.0, max(0.0, (m_eff_vec - m_min) ./ max(M_d - m_min, 1e-12)));
-if strcmpi(char(artifact_threshold_type), 'auto') || sc_opt > 0.35, w_bb_clean = max(w_clean_vec(1:min(5, num_proc))); else, w_bb_clean = mean(w_clean_vec(1:min(5, num_proc))); end
+if sc_opt > 0.35, w_bb_clean = max(w_clean_vec(1:min(5, num_proc))); else, w_bb_clean = mean(w_clean_vec(1:min(5, num_proc))); end
 sc_bb       = sc_opt * ((sc_clean / sc_opt) ^ w_bb_clean);
 bb_threshold_type = sprintf('auto:%.6f', sc_bb);
 
 for f = 1:num_proc
     w_c = w_clean_vec(f);
     sc_dirty = sc_opt * sqrt(min(1.0, m_eff_vec(f) / M_d));
-    if strcmpi(char(artifact_threshold_type), 'auto') || (low_freqs(f) >= 5.5 && low_freqs(f) <= 10.0), sc_clean_f = max(2.0 * sc_opt, 1.0); else, sc_clean_f = sc_clean; end; sc_band = (sc_dirty ^ (1.0 - w_c)) * (sc_clean_f ^ w_c);
+    if (low_freqs(f) >= 5.5 && low_freqs(f) <= 10.0), sc_clean_f = max(2.0 * sc_opt, 1.0); else, sc_clean_f = sc_clean; end; sc_band = (sc_dirty ^ (1.0 - w_c)) * (sc_clean_f ^ w_c);
     band_threshold_types{f} = sprintf('auto:%.6f', sc_band);
 end
 end
