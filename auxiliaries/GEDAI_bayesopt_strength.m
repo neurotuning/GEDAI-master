@@ -76,8 +76,9 @@ clean_up = onCleanup(@() warning(warn_state));
 
 % Step 0: Evaluate 'auto' (0.50x) baseline first and compute fixed outer Z3 noise_multiplier (without auto_scale)
 outer_noise_multiplier = [];
-[sensai_auto, en_auto, outer_noise_multiplier] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
-en_cap = en_auto + 1.0;
+[sensai_auto, en_auto, outer_noise_multiplier, w_dirty_rec, w_rank_rec] = eval_autoscale_metrics(0.5, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
+en_margin_clean = 0.05 + 2.0 * w_rank_rec;
+en_cap = max(55.0 * w_dirty_rec, en_auto + en_margin_clean * (1.0 - w_dirty_rec) + 6.0 * w_dirty_rec);
 
 eval_hist_scale  = 0.5;
 eval_hist_sensai = sensai_auto;
@@ -85,9 +86,9 @@ eval_hist_enova  = en_auto;
 eval_hist_obj    = sensai_auto; % At 0.50x ('auto'), ENOVA penalty is 0
 
 % Initial log-spaced anchor seeds across the trust region around 'auto' (0.50x)
-default_seeds = [1/3; 0.42; 0.65; 1.00; 1.50];
+default_seeds = [0.20; 1/3; 0.42; 0.65; 1.00; 1.50];
 if verbose == 0 && ~plot_opt
-    default_seeds = [1/3; 0.42; 0.65; 1.00];
+    default_seeds = [0.20; 1/3; 0.42; 0.65; 1.00];
 end
 n_init = min(numel(default_seeds), max(1, max_evals - 1));
 init_scales = default_seeds(1:n_init);
@@ -182,7 +183,8 @@ end
             return;
         end
         [sen_v, en_v] = eval_autoscale_metrics(sc_val, EEG_eval, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_multiplier);
-        obj_v = sen_v - 2.0 * max(0, en_v - en_cap)^1.5 - 2.0 * max(0, (en_auto - 1.5) - en_v)^1.5;
+        en_norm = max(0.10, en_margin_clean * (1.0 - w_dirty_rec) + w_dirty_rec);
+        obj_v = sen_v + 36.0 * w_rank_rec * max(0, min(sc_val, 1.0) - 0.5) - 3.0 * (max(0, en_v - en_cap) / en_norm)^1.5;
         eval_hist_scale(end+1, 1)  = sc_val;
         eval_hist_sensai(end+1, 1) = sen_v;
         eval_hist_enova(end+1, 1)  = en_v;
@@ -192,24 +194,39 @@ end
 
 end
 
-function [sensai_score, enova_pct, outer_noise_mult] = eval_autoscale_metrics(sc_val, EEG_in, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_mult)
+function [sensai_score, enova_pct, outer_noise_mult, w_dirty, w_rank] = eval_autoscale_metrics(sc_val, EEG_in, epoch_size_in_cycles, lowcut_frequency, ref_matrix, signal_type, parallelize, outer_noise_mult)
+w_dirty = 0.0;
+w_rank  = 0.0;
 try
-    mode_str = sprintf('auto:%.6f', sc_val);
+    if abs(sc_val - 0.5) < 1e-4
+        mode_str = 'auto';
+    else
+        mode_str = sprintf('auto:%.6f', sc_val);
+    end
     [~, EEG_clean, EEG_art] = evalc( ...
         'GEDAI(EEG_in, mode_str, epoch_size_in_cycles, lowcut_frequency, ref_matrix, parallelize, false, inf, inf, signal_type, inf, ''AvgRef'', struct(''silent'', true));');
     X_cl = double(EEG_clean.data);
     X_ar = double(EEG_art.data);
     X_in_hp = X_cl + X_ar;
     refCOV_used = EEG_clean.etc.GEDAI.refCOV;
+    enova_pct = 100 * (1 - sum(X_cl(:).^2) / max(sum(X_in_hp(:).^2), 1e-15));
     if isempty(outer_noise_mult)
         if strcmpi(signal_type, 'meg')
             outer_noise_mult = 3.0;
         else
-            outer_noise_mult = 1.5 * compute_outer_z3_noise_multiplier(X_in_hp, EEG_in.srate, refCOV_used, signal_type);
+            raw_z3 = compute_outer_z3_noise_multiplier(X_in_hp, EEG_in.srate, refCOV_used, signal_type);
+            w_rank = double(EEG_in.nbchan >= 60 && EEG_in.srate >= 200);
+            if ~w_rank && (enova_pct > 75.0 || (EEG_in.nbchan >= 45 && EEG_in.nbchan < 60 && enova_pct > 20.0))
+                w_dirty = 1.0;
+            else
+                w_z3 = min(1.0, max(0.0, (3.6 - raw_z3) / 1.0));
+                w_en = min(1.0, max(0.0, (enova_pct - 65.0) / 15.0));
+                w_dirty = (1.0 - w_rank) * w_z3 * w_en;
+            end
+            outer_noise_mult = max(0.25, 1.40 - 0.55 * w_dirty - 1.10 * w_rank) * raw_z3;
         end
     end
     [sensai_score, ~, ~, ~] = SENSAI_basic(X_cl, X_ar, EEG_in.srate, 1, refCOV_used, outer_noise_mult, signal_type);
-    enova_pct = 100 * (1 - sum(X_cl(:).^2) / max(sum(X_in_hp(:).^2), 1e-15));
     if isnan(sensai_score) || isinf(sensai_score)
         sensai_score = -100;
         enova_pct = 100;
