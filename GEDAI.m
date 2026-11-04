@@ -2083,7 +2083,7 @@ if ~(ischar(artifact_threshold_type) || isstring(artifact_threshold_type)) || (~
     return;
 end
 persistent cached_sig cached_m_eff cached_w_rank cached_w_macro cached_meff_eeg cached_dip_frac
-sig_vec = [double(N_ch), double(N_pnts), double(srate), double(num_proc), ...
+sig_vec = [double(N_ch), double(N_pnts), double(srate), double(num_proc), double(epoch_size_in_cycles), ...
            double(raw_data(1, 1)), double(raw_data(end, end)), double(sum(raw_data(1, :)))];
 
 if ~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(cached_sig - sig_vec)) <= 1e-9 && numel(cached_m_eff) == num_proc
