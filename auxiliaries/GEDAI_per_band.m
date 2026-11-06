@@ -179,7 +179,7 @@ if ~isinf(smoothing_window_seconds)
             [Evec_sub(:,:,i), Eval_sub(:,:,i)] = eig(c_ep, refCOV_reg, 'chol');
         end
         
-        if is_auto_threshold && strcmpi(signal_type, 'eeg')
+        if is_auto_threshold && (strcmpi(signal_type, 'eeg') || strcmpi(signal_type, 'meg'))
             noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
                 Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold, epoch_samples);
         end
@@ -316,7 +316,7 @@ if ~isinf(smoothing_window_seconds)
         
         T_proj = refCOV_reg * Template_guess;
         M_proj = size(Template_guess, 2);
-        tol_val = 1e-12;
+        tol_val = 1e-30;
         
         for i = 1:c_len
             global_epo_idx = c_start + i - 1;
@@ -602,7 +602,7 @@ else
         Evec_sub = Evec(:,:,idx_start:idx_end);
         COV_sub = COV(:,:,idx_start:idx_end);
         
-        if is_auto_threshold && strcmpi(signal_type, 'eeg')
+        if is_auto_threshold && (strcmpi(signal_type, 'eeg') || strcmpi(signal_type, 'meg'))
             noise_multiplier = auto_scale * local_compute_z3_noise_multiplier( ...
                 Eval_sub, Evec_sub, refCOV_reg, evecs_Template_cov, SSI_top_PCs, minThreshold, epoch_samples);
         end
@@ -822,11 +822,11 @@ for epo = 1:w_len
     [ev, ord] = sort(ev_raw, 'ascend');
     all_evals_mat(:, epo) = ev;
     ev_act = ev(2:end);
-    part_ratios(epo) = (sum(ev_act)^2) / max(sum(ev_act.^2), 1e-12);
+    part_ratios(epo) = (sum(ev_act)^2) / max(sum(ev_act.^2), 1e-300);
     
     v_top1 = double(Evec_sub(:, ord(end), epo));
     p_top1 = refCOV_reg_d * v_top1;
-    top1_cos(epo) = norm(Template_guess' * (p_top1 / max(norm(p_top1), 1e-12)));
+    top1_cos(epo) = norm(Template_guess' * (p_top1 / max(norm(p_top1), 1e-300)));
 end
 
 peak_ev = all_evals_mat(end, :);

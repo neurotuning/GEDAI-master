@@ -80,7 +80,7 @@ I_chans_M = eye(num_chans, M, 'like', refCOV_reg);
 
 SIGNAL_subspace_similarity_distribution = zeros(1, num_epochs);
 NOISE_subspace_similarity_distribution = zeros(1, num_epochs);
-tol = 1e-12;
+tol = 1e-30;
 
 for epoch = 1:num_epochs
     current_evals = all_evals_mat(:, epoch);

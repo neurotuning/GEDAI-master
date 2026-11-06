@@ -84,11 +84,11 @@ if nargin < 8 || isempty(cosine_weights)
 end
 half_epoch = floor(epoch_samples / 2);
 
-% --- Purely Spatial Dipolarity-Inflated Threshold & Subspace Shield (EEG) ---
+% --- Purely Spatial Dipolarity-Inflated Threshold & Subspace Shield (EEG & MEG) ---
 % Frequency-agnostic spatial protection for dipolar cortical rhythms (delta,
 % theta, alpha, mu, beta) whose GEVD eigenvalues modestly exceed the baseline
 % threshold due to leadfield eigenvalue roll-off across modes 3..K9.
-enable_spatial_shield = strcmpi(signal_type, 'eeg') && (num_chans >= 8);
+enable_spatial_shield = (strcmpi(signal_type, 'eeg') || strcmpi(signal_type, 'meg')) && (num_chans >= 8);
 if enable_spatial_shield
     [Vs_lf, Ds_lf] = eig(double(refCOV_reg));
     [~, ord_lf] = sort(real(diag(Ds_lf)), 'descend');
@@ -111,7 +111,7 @@ for i = 1:num_epochs
         P_bad = refCOV_reg * W_bad;
         
         if enable_spatial_shield
-            active_ev_i = ev_i(ev_i > max(1e-6 * max(ev_i), 1e-12));
+            active_ev_i = ev_i(ev_i > max(1e-6 * max(ev_i), 1e-30));
             if isempty(active_ev_i)
                 ep_med_ev = median(ev_i(ev_i > 0));
             else
@@ -119,7 +119,7 @@ for i = 1:num_epochs
             end
             for k = 1:numel(bad_cols)
                 c_idx = bad_cols(k);
-                ev_ep_r = ev_i(c_idx) / max(ep_med_ev, 1e-12);
+                ev_ep_r = ev_i(c_idx) / max(ep_med_ev, 1e-30);
                 % Within-epoch eigenvalue gate: genuine dipolar cortical rhythms have eigenvalues within
                 % ~10x-24x the epoch's median GEVD eigenvalue (determined by the 5% leadfield regularization
                 % floor), whereas high-contrast artifacts exceed 32x the epoch median.
@@ -127,14 +127,14 @@ for i = 1:num_epochs
                 
                 if g_ep > 0
                     p_raw = P_bad(:, k);
-                    p_unit = p_raw / max(norm(p_raw), 1e-12);
-                    w_unit = W_bad(:, k) / max(norm(W_bad(:, k)), 1e-12);
+                    p_unit = p_raw / max(norm(p_raw), 1e-30);
+                    w_unit = W_bad(:, k) / max(norm(W_bad(:, k)), 1e-30);
                     
                     % Spatial smoothness (fraction of forward pattern energy in K6 and K9 leadfield harmonics)
                     sm6 = sum((V6' * p_unit).^2);
                     sm9 = sum((V9' * p_unit).^2);
                     pw_cos = abs(p_unit' * w_unit);
-                    ev_r = ev_i(c_idx) / max(thr_i, 1e-12);
+                    ev_r = ev_i(c_idx) / max(thr_i, 1e-30);
                     
                     % Hinged Dipolarity-Inflated Threshold:
                     s6 = max(0, (sm6 - 0.60) / 0.40);
@@ -148,7 +148,7 @@ for i = 1:num_epochs
                         if sm9 > 0.70 && epoch_samples >= 16
                             loc_p = movmean(tc_bad(k, :).^2, win_len);
                             thr_p = (1.0 + (eff_r - 1.0) * g_ep) * thr_i;
-                            w_t = max(0, 1 - (thr_p ./ max(loc_p, 1e-12)).^2);
+                            w_t = max(0, 1 - (thr_p ./ max(loc_p, 1e-30)).^2);
                             tc_bad(k, :) = w_t .* tc_bad(k, :);
                         end
                         if ev_r < (1.0 + 2.0 * g_ep) && sm6 > 0.40
