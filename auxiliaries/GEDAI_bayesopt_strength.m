@@ -19,7 +19,7 @@ function [best_scale, best_SENSAI, opt_results, selected_threshold_type] = GEDAI
 %   plot_opt                - Boolean to show optimization progress plot (default = false)
 %   signal_type             - 'eeg' or 'meg' (default = 'eeg')
 %   epoch_size_in_cycles    - Epoch size in cycles (default = 12)
-%   lowcut_frequency        - Low-cut frequency in Hz (default = 0.5)
+%   lowcut_frequency        - Low-cut frequency in Hz (default = 0.1)
 %   parallelize             - Boolean to run each GEDAI evaluation in parallel (default = false)
 %
 % Outputs:
@@ -33,7 +33,7 @@ if nargin < 6 || isempty(verbose), verbose = 1; end
 if nargin < 7 || isempty(plot_opt), plot_opt = false; end
 if nargin < 8 || isempty(signal_type), signal_type = 'eeg'; end
 if nargin < 9 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
-if nargin < 10 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
+if nargin < 10 || isempty(lowcut_frequency), lowcut_frequency = 0.1; end
 if nargin < 11 || isempty(parallelize), parallelize = false; end
 
 data = double(data);

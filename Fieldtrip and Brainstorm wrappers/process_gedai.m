@@ -51,7 +51,7 @@ function sProcess = GetDescription() %#ok<DEFNU>
     % === Low-cut frequency
     sProcess.options.lowcut_frequency.Comment = 'Low-cut frequency';
     sProcess.options.lowcut_frequency.Type    = 'value';
-    sProcess.options.lowcut_frequency.Value   = {1.0, 'Hz', 1};
+    sProcess.options.lowcut_frequency.Value   = {0.1, 'Hz', 1};
     % === Reference matrix type
     sProcess.options.label2.Comment = '<B>Leadfield matrix</B>';
     sProcess.options.label2.Type    = 'label';

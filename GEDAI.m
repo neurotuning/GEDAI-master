@@ -8,10 +8,10 @@
 %    >>  [EEG] = GEDAI(EEG);
 %
 % Example 2: Defining some parameters
-%    >>  [EEG] = GEDAI(EEG, 'auto', 12, 0.5, 'precomputed', true, false, 0.9);
+%    >>  [EEG] = GEDAI(EEG, 'auto', 12, 0.1, 'precomputed', true, false, 0.9);
 %
 % Example 3: Using a "custom" [channel x channel] reference matrix
-%    >>  [EEG] = GEDAI(EEG, 'auto', 12, 0.5, your_refCOV);
+%    >>  [EEG] = GEDAI(EEG, 'auto', 12, 0.1, your_refCOV);
 %
 % Inputs:
 %
@@ -29,8 +29,15 @@
 %   epoch_size_in_cycles        - Epoch size in number of wave cycles for each
 %                                 wavelet band. Default is 12.
 %
-%   lowcut_frequency            - Low-cut frequency in Hz. Wavelet bands below this
-%                                 frequency will be excluded. Default is 0.5 Hz.
+%   lowcut_frequency            - Low-cut frequency in Hz (zero-phase Haar wavelet
+%                                 high-pass). Default is 0.1 Hz (suitable for general
+%                                 EEG and standard baseline-corrected ERPs).
+%                                 Set to 0 to disable wavelet temporal high-passing
+%                                 (globally zero-centers channels; recommended for
+%                                 pre-stimulus/anticipatory activity, onset-latency
+%                                 analyses, or data pre-filtered with a causal filter).
+%                                 Set to 0.5 Hz for continuous/resting-state EEG with
+%                                 heavy ultra-slow drift and no slow ERPs.
 %
 %   ref_matrix_type             - Matrix used as a reference for deartifacting.
 %
@@ -132,7 +139,7 @@ if nargin < 3 || isempty(epoch_size_in_cycles)
     epoch_size_in_cycles = 12;  % Note: Number of wave CYCLES per epoch across wavelet bands (default = 12 cycles)
 end
 if nargin < 4 || isempty(lowcut_frequency)
-    lowcut_frequency = 0.5; %  exclude all wavelet bands below this frequency (default = 0.5 Hz)
+    lowcut_frequency = 0.1; %  exclude all wavelet bands below this frequency (default = 0.1 Hz)
 end
 if nargin < 5 || isempty(ref_matrix_type)
     ref_matrix_type = 'auto';
@@ -610,21 +617,27 @@ else
 end
 
 % --- Wavelet-based High-Pass Filtering ---
-% Calculate required level to resolve lowcut_frequency
-highpass_frequency=0.1;
-hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
-% Limit to maximum possible level given data length
-max_possible_level = floor(log2(size(EEGavRef.data, 2)));
-hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
-% Ensure reasonable minimum
-hp_wavelet_levels = max(hp_wavelet_levels, 3);
-wavelet_type = 'haar';
-
-% Identify wavelet bands to remove based on lowcut_frequency
 srate = EEGavRef.srate;
-num_bands_hp = hp_wavelet_levels + 1;
-upper_bounds = srate ./ (2.^(1:num_bands_hp));
-bands_to_zero = find(upper_bounds <= lowcut_frequency);
+wavelet_type = 'haar';
+if lowcut_frequency > 0
+    % Calculate required level to resolve lowcut_frequency
+    highpass_frequency = min(0.1, lowcut_frequency);
+    hp_wavelet_levels = ceil(log2(EEGavRef.srate / highpass_frequency) - 1);
+    % Limit to maximum possible level given data length
+    max_possible_level = floor(log2(size(EEGavRef.data, 2)));
+    hp_wavelet_levels = min(hp_wavelet_levels, max_possible_level);
+    % Ensure reasonable minimum
+    hp_wavelet_levels = max(hp_wavelet_levels, 3);
+
+    % Identify wavelet bands to remove based on lowcut_frequency
+    num_bands_hp = hp_wavelet_levels + 1;
+    upper_bounds = srate ./ (2.^(1:num_bands_hp));
+    bands_to_zero = find(upper_bounds <= lowcut_frequency);
+else
+    % When lowcut_frequency <= 0, disable wavelet high-pass and globally zero-center each channel
+    bands_to_zero = [];
+    EEGavRef.data = EEGavRef.data - mean(EEGavRef.data, 2);
+end
 
 if ~isempty(bands_to_zero)
     % Robust execution order: GPU(Double) -> GPU(Single) -> CPU(Double) -> CPU(Single)
@@ -755,9 +768,12 @@ end
 unfiltered_data = cleaned_broadband_data';
 wavelet_type = 'haar';
 
-% Calculate required number of wavelet levels to isolate lowcut_frequency
-% We need: srate / 2^number_of_wavelet_bands <= lowcut_frequency
-number_of_wavelet_bands = ceil(log2(EEGavRef.srate / lowcut_frequency));
+% Calculate required number of wavelet levels for spectral decomposition
+% Use at least 0.5 Hz reference split so that when lowcut_frequency <= 0.1 Hz
+% (including 0 Hz), the smooth scaling band A_J (0 - 0.5 Hz) is retained and
+% spatially cleaned without requiring >2.5-minute covariance windows.
+spectral_split_freq = max(0.5, lowcut_frequency);
+number_of_wavelet_bands = ceil(log2(EEGavRef.srate / spectral_split_freq));
 % Limit to maximum possible level given data length
 max_possible_level = floor(log2(size(EEGavRef.data, 2)));
 number_of_wavelet_bands = min(number_of_wavelet_bands, max_possible_level);
@@ -785,9 +801,17 @@ for f = 1:number_of_discrete_wavelet_bands
     lower_frequencies(f) = lower_bound;
     upper_frequencies(f) = upper_bound;
 end
+% The final MRA band (smooth scaling band A_J) shares the cutoff boundary of the lowest detail band D_J
+if number_of_discrete_wavelet_bands >= 2
+    lower_frequencies(end) = lower_frequencies(end - 1);
+end
 
-
-lowest_wavelet_bands_to_exclude = sum(upper_frequencies <= lowcut_frequency);
+if lowcut_frequency < 0.5
+    % Retain and spatially clean all spectral MRA bands (partition of unity: D_1 + ... + D_J + A_J = I)
+    lowest_wavelet_bands_to_exclude = 0;
+else
+    lowest_wavelet_bands_to_exclude = sum(upper_frequencies <= lowcut_frequency);
+end
 num_bands_to_process = number_of_discrete_wavelet_bands - lowest_wavelet_bands_to_exclude;
 total_processed_bands = num_bands_to_process + 1;
 SENSAI_score_per_band = zeros(1, total_processed_bands);
@@ -800,7 +824,7 @@ artifact_threshold_array_per_band{1} = broadband_thresh;
 ENOVA_per_band(1) = broadband_ENOVA;
 
 % --- Check if data is long enough for the lowest frequency epoch size---
-if num_bands_to_process > 0
+if num_bands_to_process > 0 && lowcut_frequency >= 0.5
     lowest_band_to_process_idx = num_bands_to_process;
     epoch_size_lowest_band = epoch_size_in_cycles / lower_frequencies(lowest_band_to_process_idx);
     required_samples = epoch_size_lowest_band * srate;
@@ -823,7 +847,8 @@ end
 epoch_sizes_per_wavelet_band = epoch_size_in_cycles ./ lower_frequencies;
 % Ensure at least k*C samples (k_channel_multiplier) to limit rank deficiency in high-density arrays
 min_epoch_samples = min(ceil(k_channel_multiplier * size(EEGavRef.data, 1)), size(EEGavRef.data, 2));
-epoch_sizes_per_wavelet_band = max(epoch_sizes_per_wavelet_band, min_epoch_samples / srate);
+max_epoch_samples = size(EEGavRef.data, 2);
+epoch_sizes_per_wavelet_band = min(max(epoch_sizes_per_wavelet_band, min_epoch_samples / srate), max_epoch_samples / srate);
 
 % --- Display wavelet band-widths and epoch sizes ---
 % disp(' ');
@@ -2064,13 +2089,21 @@ m_eff_eeg = 3.0;
 dip_frac  = 0.5;
 
 [N_ch, N_pnts] = size(raw_data);
-num_wav_bands = max(6, min(ceil(log2(srate / lowcut_frequency)), floor(log2(N_pnts))));
+spectral_split_freq = max(0.5, lowcut_frequency);
+num_wav_bands = max(6, min(ceil(log2(srate / spectral_split_freq)), floor(log2(N_pnts))));
 up_freqs = srate ./ (2.^(1:num_wav_bands));
 low_freqs = srate ./ (2.^(2:num_wav_bands+1));
-num_proc = num_wav_bands - sum(up_freqs <= lowcut_frequency);
-while num_proc > 0 && (epoch_size_in_cycles / low_freqs(num_proc)) * srate > N_pnts
-    lowcut_frequency = up_freqs(num_proc);
+if num_wav_bands >= 2
+    low_freqs(end) = low_freqs(end - 1);
+end
+if lowcut_frequency < 0.5
+    num_proc = num_wav_bands;
+else
     num_proc = num_wav_bands - sum(up_freqs <= lowcut_frequency);
+    while num_proc > 0 && (epoch_size_in_cycles / low_freqs(num_proc)) * srate > N_pnts
+        lowcut_frequency = up_freqs(num_proc);
+        num_proc = num_wav_bands - sum(up_freqs <= lowcut_frequency);
+    end
 end
 
 bb_threshold_type = artifact_threshold_type;
@@ -2098,7 +2131,7 @@ if ~isempty(cached_sig) && isequal(size(cached_sig), size(sig_vec)) && max(abs(c
 else
     act_level = num_wav_bands - 1;
     min_ep_s  = min(ceil(k_channel_multiplier * N_ch), N_pnts);
-    ep_sizes  = max(epoch_size_in_cycles ./ low_freqs(1:num_proc), min_ep_s / srate);
+    ep_sizes  = min(max(epoch_size_in_cycles ./ low_freqs(1:num_proc), min_ep_s / srate), N_pnts / srate);
     for f = 1:num_proc
         id_s = round(ep_sizes(f) * srate);
         if rem(id_s, 2) ~= 0, id_s = id_s + 1; end

@@ -15,7 +15,7 @@ function [data_clean, data_artifacts, SENSAI_score, SENSAI_score_per_band, artif
 %                                 expense of signal, while milder threshold. ("auto-") might retain more signal at the expense of noise.
 %                         
 %   cfg.epoch_size               (double)  - Epoch size in wave CYCLES. [Default: 12]
-%   cfg.lowcut_frequency         (double)  - Low-cut frequency in Hz. [Default: 0.5]
+%   cfg.lowcut_frequency         (double)  - Low-cut frequency in Hz. [Default: 0.1]
 %   cfg.ref_matrix_type          (char or matrix) - Leadfield reference. [Default: 'precomputed']
 %                                   Matrix used as a reference for deartifacting.
 %                                  The default "precomputed" uses a BEM leadfield for
@@ -59,7 +59,7 @@ end
 % ---------- defaults ----------
 def.artifact_threshold_type = 'auto';
 def.epoch_size              = 12;       % wave cycles (= epoch_size_in_cycles in GEDAI)
-def.lowcut_frequency        = 0.5;
+def.lowcut_frequency        = 0.1;
 def.ref_matrix_type         = 'precomputed';
 def.parallel                = true;
 def.visualize_artifacts     = false;
