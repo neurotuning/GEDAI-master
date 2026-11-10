@@ -4,7 +4,9 @@ Basic instructions for using the GEDAI plugin for EEGLAB
 * Step 1: After importing the EEG data, go to **Edit -> Channel locations**, to import channel labels/locations (unless already done so).
 Make sure a) EEG channel labels (e.g. "Fp1", "Fz", etc without any trailing characters) or b) EEG channel locations (e.g. XYZ coordinates) are present in the EEG.chanlocs structure. 
 
-* Step 2:  Launch the GEDAI plugin. We recommend high-passing the data when GEDAI denoising (e.g. low-cut frequency = 0.5 Hz)
+* Step 2: Launch the GEDAI plugin. By default, GEDAI uses a 0.1 Hz zero-phase wavelet low-cut (suitable for general EEG and standard baseline-corrected ERP analyses).
+  - For pre-stimulus/anticipatory activity (e.g., CNV, SPN, readiness potential), onset-latency estimation, or if you have already applied a causal high-pass filter before GEDAI, set low-cut frequency = 0 Hz.
+  - For resting-state or continuous EEG with heavy slow drift and no stimulus-locked slow ERPs, you may set low-cut frequency = 0.5 Hz.
 
 * Step 3: For the leadfield matrix type, depending on Step 1 above, a) use option "precomputed", for b) use option "interpolated".
 

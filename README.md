@@ -36,6 +36,11 @@
 
 Check out the [Wiki](https://github.com/neurotuning/GEDAI-master/wiki/).
 
+* **Low-cut frequency (`lowcut_frequency`) guidance:**
+  * **`0.1` Hz (Default):** Applies a single-stage `0.1` Hz zero-phase Haar wavelet high-pass before broadband cleaning and retains/spatially cleans all spectral wavelet bands (`D_1 .. D_8 + A_8`). Recommended for general EEG and standard baseline-corrected ERP analyses (`P1/N1/P2`, `N400`, `P300`, `LPP`).
+  * **`0` Hz (Zero temporal filtering):** Disables wavelet high-pass filtering inside GEDAI (globally zero-centering each channel while spatially cleaning all wavelet bands). Recommended for studying un-baselined pre-stimulus or anticipatory activity (`CNV`, `SPN`, readiness potential), response onset latencies, or when data have already been high-passed with an external causal filter prior to GEDAI.
+  * **`0.5` Hz:** Removes all `< 0.5` Hz drift temporally in addition to spatial GEVD cleaning. Optional for resting-state / continuous EEG where no slow event-related potentials or pre-stimulus baselines are analyzed.
+
 ## 📜 Citation
 
 If you use GEDAI in your research, please cite the original publication:
