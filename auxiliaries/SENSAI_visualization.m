@@ -108,7 +108,7 @@ end
 if nargin >= 10 && ~isempty(SENSAI_score)
     if nargin < 11 || isempty(mean_ENOVA), mean_ENOVA = 0; end
     if nargin < 12 || isempty(epoch_size_in_cycles), epoch_size_in_cycles = 12; end
-    if nargin < 13 || isempty(lowcut_frequency), lowcut_frequency = 0.5; end
+    if nargin < 13 || isempty(lowcut_frequency), lowcut_frequency = 0.1; end
     if isempty(artifact_threshold_type), artifact_threshold_type = 'auto'; end
     if isnumeric(artifact_threshold_type)
         artifact_threshold_str = num2str(artifact_threshold_type, '%.2f');
